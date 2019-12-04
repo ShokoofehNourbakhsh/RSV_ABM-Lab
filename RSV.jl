@@ -54,8 +54,8 @@ const dwells_householdsize_Nuk = @SVector[0,755,595,555,585,1135]
 
 # infect_dwells parameters
 const inf_range = @SVector[100:400]
-const SAR_Nuk = @SVector[0.63,0.40,0.27] # Nunavik: secondary attack rate for 1 , 2, 3 yearsold kids
-#const SAR_Nuk = @SVector[1,1,1]
+#const SAR_Nuk = @SVector[0.63,0.40,0.27] # Nunavik: secondary attack rate for 1 , 2, 3 yearsold kids
+const SAR_Nuk = @SVector[1,1,1]
 
 const humans = Array{Human}(undef, population_Nuk)
 const dwells = Array{Dwelling}(undef, dwells_Nuk)
@@ -95,21 +95,16 @@ function main(simnumber::Int64 , region::String)
     init_humans(numhumans)
     init_population(humans, agedist, agebraks, predist, smokdist)
     init_dwellings(numdwells, householdsize)
-    apply_humandistribution(dwells, humans, agebraks)
+    apply_humandistribution(dwells, humans)
 
     ## start infecting individuals who bring infection to the home
-    n_inf = rand(range[1])
-    #n_inf = 3625
+    #n_inf = rand(range[1])
+    n_inf = length(dwells)
     infect_dwells(dwells, humans, n_inf, SAR)
 
     ## colecting total infections for kids between 1-3 yearsold
     for i=1:3
-        id_kids = findall(x -> x.agegroup == i ,humans)
-        kids = Array{Human}(undef, length(id_kids))
-        for j=1:length(id_kids)
-            kids[j] = humans[id_kids[j]]
-        end
-        infection_total[i] = length(findall(y -> y.health == 1 ,kids))
+        infection_total[i] = length(findall(x -> x.agegroup == i && x.health == 1 ,humans))
     end
     return n_inf, infection_total
 end
@@ -226,29 +221,24 @@ export init_dwellings
 
 
 ######## randomly distributes humans to privet dwellings
-function apply_humandistribution(d, h, agebraks)
+function apply_humandistribution(d, h)
     # first distribute one adult 19+ to every dwell
-    humans_G7 = findall(x -> x.agegroup == 7, h)
+    humans_G7 = filter(x -> x.agegroup == 7 ,h)
     for i = 1:length(d)
-        d[i].humans[1] = humans_G7[i]
+        d[i].humans[1] = humans_G7[i].idx
     end
-    # second distribute the leftover G7 and all other ages, randomly
-    for j = 1:length(agebraks)
-        if j == length(agebraks) # agegroup 7 (19+)
-            humans_G = humans_G7[length(d)+1:end] # leftover G7
-        else
-            humans_G = findall(x -> x.agegroup == j, h) # finding agegroups j=1,2,3,4,5:18,19>
+
+    # second distribute the leftover population, randomly into the dwells
+    left_humans = filter(e -> !(e in humans_G7[1:length(d)]),h) #left humans to distribute
+    for j = 1:length(left_humans)
+        #eligible dwells are not occuppied fully and at least has one free space for humans
+        eligible_dwells = findall(y -> length(y.humans[y.humans .== 0]) > 0, d)
+        if  length(eligible_dwells) == 0 #  should never happen, otherwide our dwells.humans not setup correctly
+            error("no house left to distribute humans")
         end
-        for i = 1:length(humans_G)
-            #eligible dwells are not occuppied fully and at least has one free space for humans
-            eligible_dwells = findall(y -> length(y.humans[y.humans .== 0]) > 0, d)
-            if  length(eligible_dwells) == 0 #  should never happen, otherwide our dwells.humans not setup correctly
-                error("no house left to distribute humans")
-            end
-            id = rand(eligible_dwells)
-            idd = findfirst(z -> z == 0, d[id].humans)
-            d[id].humans[idd] = humans_G[i]
-        end
+        id = rand(eligible_dwells)
+        idd = findfirst(z -> z == 0, d[id].humans)
+        d[id].humans[idd] = left_humans[j].idx
     end
     ## making sure dwells.size is setup correctly
     eligible_dwells = findall(y -> length(y.humans[y.humans .== 0]) > 0, d)
@@ -311,33 +301,33 @@ export infect_dwells
 
 ##### introducing infection to the households
 function infect_dwells(d, h, n_inf, SAR)
-    ## input n_inf number of infected individuals between 5-100 yearsold. who bring infection home
+    ## input n_inf number of infected individuals between 5-100 yearsold. who bring infection homes
     dwell_inf = sample(d, n_inf; replace = false)  # infected dwells
     for i = 1:n_inf
-        sus_1 = dwell_inf[i].humans[findall(x -> h[x].agegroup == 1 ,dwell_inf[i].humans)] # susceptiple infants
-        sus_2 = dwell_inf[i].humans[findall(x -> h[x].agegroup == 2 ,dwell_inf[i].humans)] # susceptiple 1-2 years
-        sus_3 = dwell_inf[i].humans[findall(x -> h[x].agegroup == 3 ,dwell_inf[i].humans)] # susceptiple 2-3 years
-        if length(sus_1) > 0
-            for j1 = 1:length(sus_1)
-                if rand() < SAR[1]
-                    h[sus_1[j1]].health = 1 # infected
-                end
-            end
-        elseif length(sus_2) > 0
-            for j2 = 1:length(sus_2)
-                if rand() < SAR[2]
-                    h[sus_2[j2]].health = 1 # infected
-                end
-            end
-        elseif length(sus_3) > 0
-            for j3 = 1:length(sus_3)
-                if rand() < SAR[3]
-                    h[sus_3[j3]].health = 1 # infected
+        for j = 1:3
+            sus = filter(x -> h[x].agegroup == j ,dwell_inf[i].humans) # susceptiple infants
+            if length(sus) > 0
+                for k = 1:length(sus)
+                    if rand() < SAR[j]
+                        h[sus[k]].health = 1 # infected
+                    end
                 end
             end
         end
     end
 end
 export infect_dwells
+
+
+
+#------------------------------
+function reset_humans()
+    ### reset health's status of kids for the next simulation
+    @inbounds kids_123 = filter(x -> x.agegroup == 1 || x.agegroup == 2 || x.agegroup == 3 ,humans)
+    for i=1:length(kids_123)
+        kids_123[i].health = 0
+    end
+end
+export reset_humans
 
 end # module
