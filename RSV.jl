@@ -11,13 +11,14 @@ using StaticArrays
 using Random
 using Parameters
 
-# construct agent's types as an object
+#---------------------------------------------------
+# Construct agent's types as an object
+#---------------------------------------------------
 mutable struct Human
     idx::Int64
     health::Int64       # 0 = susc, 1 = infected
-    age::Int64          # in yeras
-    agegroup::Int64    # G1 = < 1, G2= 1, G3= 2, G4= 3, G5= 4, G6= 5:19, G7= > 19
-    smoker::Int64       # 1 = no,  2 = yes
+    age::Int64          # in months
+    agegroup::Int64    # G1 = 0-2, G2= 3-5, G3= 6-11, G4= 12-23, G5= 24-35, G6= 5:19 years, G7=19+ years
     preterm:: Int64     # 1 = no,  2 = yes
     Human() = new()
 end
@@ -25,16 +26,19 @@ end
 mutable struct Dwelling
     idx::Int64
     humans::Array{Int64}
-    #humans::Human
     size::Int64
     Dwelling() = new()
 end
 
-######## global variables
+
+
+#----------------------------------------------------
+# Global variables
+#-----------------------------------------------------
 # general parameters
 # age populations are downloaded from Census Canada 2016
 # data organized in file 'parameters_Shokoofeh.xlsx'
-const population_Nuk = 13200 # total population of Nunavik
+const population_Nuk = 13198 # total population of Nunavik
 const dwells_Nuk = 3625 # total privet dwells in Nunavik
 const population_Nut = 1500 #???????
 const dwells_Nut = 5000 #???????
@@ -42,10 +46,12 @@ const region = ["Nunavik","Nunavit"]
 
 ### charectristics parameters
 # categorical probability distribution of discrete age_groups
-const agedist_Nuk =  Categorical(@SVector[0.022727273, 0.026136364, 0.026136364, 0.026136364, 0.022727273, 0.310606061, 0.565530303])
-const agebraks_Nuk = @SVector[0:0.99, 1:1.99, 2:2.99, 3:3.99, 4:4.99, 5:18.99, 19:100] #age_groups
-const predist_Nuk = Categorical(@SVector[0.972027972, 0.027972028])  # distribution of preterm infants
-const smokdist_Nuk = Categorical(@SVector[0.37, 0.63])  # distribution of adult smoker
+const agedist_Nuk =  Categorical(@SVector[0.006819215,0.007576906,0.008183058,0.026140324,0.026140324,0.026140324,0.022730717,0.310653129,0.565616002])
+const agebraks_Nuk = @SVector[0:2, 3:5, 6:11, 12:23, 24:35, 36:47, 48:59, 60:227, 228:1200] #age_groups in months
+#const agebraks_Nuk = @SVector[0:0.99, 1:1.99, 2:2.99, 3:3.99, 4:4.99, 5:18.99, 19:100] #age_groups
+#const agedist_Nuk =  Categorical(@SVector[0.022727273, 0.026136364, 0.026136364, 0.026136364, 0.022727273, 0.310606061, 0.565530303])
+const predist_Nuk = @SVector[0.033333333,0.09,0.021296296]  # distribution of preterm infants (0-2,3-5,6-11 months)
+#const smokdist_Nuk = Categorical(@SVector[0.37, 0.63])  # distribution of adult smoker
 
 ## dwell household parameters
 const householdsize_Nuk = @SVector[1,2,3,4,5:20]
@@ -54,8 +60,8 @@ const dwells_householdsize_Nuk = @SVector[0,755,595,555,585,1135]
 
 # infect_dwells parameters
 const inf_range = @SVector[100:400]
-#const SAR_Nuk = @SVector[0.63,0.40,0.27] # Nunavik: secondary attack rate for 1 , 2, 3 yearsold kids
-const SAR_Nuk = @SVector[1,1,1]
+const SAR_Nuk = @SVector[0.63,0.63,0.63,0.40,0.27] # Nunavik: secondary attack rate for < 1 , 2, 3 yearsold kids
+#Extreme Test: const SAR_Nuk = @SVector[1,1,1]
 
 const humans = Array{Human}(undef, population_Nuk)
 const dwells = Array{Dwelling}(undef, dwells_Nuk)
@@ -63,7 +69,9 @@ export humans, dwells, infection_total
 
 
 
-### main function to run for one simulation
+#-------------------------------------------------
+# main function to run for one simulation
+#-------------------------------------------------
 function main(simnumber::Int64 , region::String)
     Random.seed!(simnumber)
 
@@ -74,7 +82,6 @@ function main(simnumber::Int64 , region::String)
         agedist = agedist_Nuk
         agebraks = agebraks_Nuk
         predist = predist_Nuk
-        smokdist = smokdist_Nuk
         numdwells = dwells_Nuk
         householdsize = dwells_householdsize_Nuk
         SAR = SAR_Nuk
@@ -89,32 +96,38 @@ function main(simnumber::Int64 , region::String)
 
 
     ## data collection arrays
-    infection_total = zeros(Int64, 3) # total infected kids between 1-3 years old during one season
+    infection_total = zeros(Int64, 5) # total infected kids between 1-3 years old during one season
 
     ## simulation setup functions
-    init_humans(numhumans)
-    init_population(humans, agedist, agebraks, predist, smokdist)
-    init_dwellings(numdwells, householdsize)
+    if simnumber == 1
+        init_humans(numhumans)
+        init_dwellings(numdwells, householdsize)
+    else
+        reset_health(humans)
+        reset_humandistribution(dwells)
+    end
+    init_population(humans, agedist, agebraks, predist)
     apply_humandistribution(dwells, humans)
 
     ## start infecting individuals who bring infection to the home
-    #n_inf = rand(range[1])
-    n_inf = length(dwells)
+    n_inf = rand(range[1])
+    # Extreme Test: n_inf = length(dwells)
     infect_dwells(dwells, humans, n_inf, SAR)
 
-    ## colecting total infections for kids between 1-3 yearsold
-    for i=1:3
+    ## colecting total infections for kids between 0-2,3-5,6-11,12,23,24-35 months
+    for i=1:5
         infection_total[i] = length(findall(x -> x.agegroup == i && x.health == 1 ,humans))
     end
     return n_inf, infection_total
 end
-
 export main
 
 
+#--------------------------------------------------
+# Required Functions for model
+#---------------------------------------------------
 
-
-############################ setting up agents for model
+## setting up agent 'humans'
 function init_humans(num_humans::Int64)
     @inbounds for i = 1:length(humans)
         humans[i] = Human()              ## create an empty human
@@ -122,59 +135,41 @@ function init_humans(num_humans::Int64)
         humans[i].health = 0
         humans[i].age = 0
         humans[i].agegroup = 0
-        humans[i].smoker = 1
         humans[i].preterm = 1
     end
 end
 export init_humans
 
-## randomly assigns age, age_group, preterm < 1 and smoker 19+
-function apply_charectristics(x, agedist , agebraks, predist, smokdist)
+## randomly assigns age, age_group, preterm < 1
+function apply_charectristics(x, agedist , agebraks, predist)
     x.agegroup = rand(agedist)
     x.age = rand(agebraks[x.agegroup])
 
-    if x.agegroup == 1   #assign preterm if < 1 years old
-        x.preterm = rand(predist)
-    end
+    #assign preterm if < 1 years old
+    if x.agegroup == 1
+        x.preterm = rand(Categorical(@SVector[1-predist[1],predist[1]]))
 
-    if x.agegroup == 7  #assign smoker if 19+ years old
-        x.smoker = rand(smokdist)
+    elseif x.agegroup == 2
+        x.preterm = rand(Categorical(@SVector[1-predist[2],predist[2]]))
+
+    elseif x.agegroup == 3
+        x.preterm = rand(Categorical(@SVector[1-predist[3],predist[3]]))
     end
 end
 export apply_charectristics
 
 ###### Assign charectristics to humans: initial populations
-function init_population(h, agedist , agebraks, predist, smokdist)
+function init_population(h, agedist , agebraks, predist)
     @inbounds for i = 1:length(h)
-        apply_charectristics(h[i], agedist, agebraks, predist, smokdist) #charectristics; age,agegroup,preterm,smoker
+        apply_charectristics(h[i], agedist, agebraks, predist) #charectristics; age,agegroup,preterm
     end
 end
 export init_population
 
-"""
-######### setup dwells with assigned humans and household size
-function init_dwellings()
-    @inbounds for i = 1:length(dwells)
-        dwells[i] = Dwelling()  ## create an empty house
-        dwells[i].idx = i
-    end
-    S_min = 1
-    S_max = 0
-    for H = 1:length(dwells_householdsize)-1 # groupsize loop
-        S_min += dwells_householdsize[H]
-        S_max += dwells_householdsize[H+1]
-        for S = S_min:S_max  # assigning size loop
-            dwells[S].size = H
-            dwells[S].humans = zeros(SVector{dwells[S].size,Int64})
-        end
-    end
-    test_dwellsize = sum([dwells[n].size for n=1:length(dwells)]) # It must give total humnas
-end
-export init_dwellings, test_dwellsize
-"""
 
 
-######### setup dwells with assigned humans and household size
+
+## setup dwells with assigned humans and household size
 function init_dwellings(num_dwells::Int64, dwells_householdsize)
     @inbounds for i = 1:length(dwells)
         dwells[i] = Dwelling()  ## create an empty house
@@ -209,13 +204,12 @@ function init_dwellings(num_dwells::Int64, dwells_householdsize)
             end
         end
     end
-
-    return
     if sum([dwells[n].size for n=1:length(dwells)]) == length(humans)
-        println("total population is equall to total dwells' size")
+        a = println("total population is equall to total dwells' size")
     else
-        println("total population is NOT equall to total dwells' size")
+        a = println("total population is NOT equall to total dwells' size")
     end
+    return a
 end
 export init_dwellings
 
@@ -223,13 +217,13 @@ export init_dwellings
 ######## randomly distributes humans to privet dwellings
 function apply_humandistribution(d, h)
     # first distribute one adult 19+ to every dwell
-    humans_G7 = filter(x -> x.agegroup == 7 ,h)
-    for i = 1:length(d)
-        d[i].humans[1] = humans_G7[i].idx
+    humans_G9 = filter(x -> x.agegroup == 9 ,h)
+    @inbounds for i = 1:length(d)
+        d[i].humans[1] = humans_G9[i].idx
     end
 
     # second distribute the leftover population, randomly into the dwells
-    left_humans = filter(e -> !(e in humans_G7[1:length(d)]),h) #left humans to distribute
+    left_humans = filter(e -> !(e in humans_G9[1:length(d)]),h) #left humans to distribute
     for j = 1:length(left_humans)
         #eligible dwells are not occuppied fully and at least has one free space for humans
         eligible_dwells = findall(y -> length(y.humans[y.humans .== 0]) > 0, d)
@@ -240,6 +234,7 @@ function apply_humandistribution(d, h)
         idd = findfirst(z -> z == 0, d[id].humans)
         d[id].humans[idd] = left_humans[j].idx
     end
+
     ## making sure dwells.size is setup correctly
     eligible_dwells = findall(y -> length(y.humans[y.humans .== 0]) > 0, d)
     if  length(eligible_dwells) !== 0 #
@@ -247,64 +242,23 @@ function apply_humandistribution(d, h)
     end
     ## making sure all dwells include at least one adult (19+)
     for k = 1:length(d)
-        dwells7 = findall(t -> h[t].agegroup == 7 , d[k].humans)
-        if length(dwells7) == 0
+        dwells9 = findall(t -> h[t].agegroup == 9 , d[k].humans)
+        if length(dwells9) == 0
             error("Not all dwells include at least one adult 19+")
         end
     end
 end
 export apply_humandistribution
 
-"""
-##### introducing infection to the households
-function infect_dwells(d, h, n_inf, SAR)
-    ## input n_inf number of infected individuals between 5-100 yearsold. who bring infection home
-    dwell_inf = sample(d, n_inf; replace = false)  # infected dwells
-    for i = 1:n_inf
-        sus_1 = findall(x -> h[x].agegroup == 1 ,dwell_inf[i].humans) # susceptiple infants
-        sus_2 = findall(x -> h[x].agegroup == 2 ,dwell_inf[i].humans) # susceptiple 1-2 years
-        sus_3 = findall(x -> h[x].agegroup == 3 ,dwell_inf[i].humans) # susceptiple 2-3 years
-        if length(sus_1) == 0 && length(sus_2) == 0 && length(sus_3) == 0
-            continue
-        elseif length(sus_1) > 0
-            for j1 = 1:length(sus_1)
-                r = rand(Categorical(@SVector[1-SAR[1],SAR[1]]))
-                if r == 1
-                    h[sus_1[j1]].health = 0  # healthy
-                else
-                    h[sus_1[j1]].health = 1 # infected
-                end
-            end
-        elseif length(sus_2) > 0
-            for j2 = 1:length(sus_2)
-                r = rand(Categorical(@SVector[1-SAR[2],SAR[2]]))
-                if r == 1
-                    h[sus_2[j2]].health = 0  # healthy
-                else
-                    h[sus_2[j2]].health = 1 # infected
-                end
-            end
-        elseif length(sus_3) > 0
-            for j3 = 1:length(sus_3)
-                r = rand(Categorical(@SVector[1-SAR[3],SAR[3]]))
-                if r == 1
-                    h[sus_3[j3]].health = 0  # healthy
-                else
-                    h[sus_3[j3]].health = 1 # infected
-                end
-            end
-        end
-    end
-end
-export infect_dwells
-"""
 
-##### introducing infection to the households
+##================================================
+# Introducing infection to the households
+#-------------------------------------------------
 function infect_dwells(d, h, n_inf, SAR)
     ## input n_inf number of infected individuals between 5-100 yearsold. who bring infection homes
     dwell_inf = sample(d, n_inf; replace = false)  # infected dwells
     for i = 1:n_inf
-        for j = 1:3
+        for j = 1:5
             sus = filter(x -> h[x].agegroup == j ,dwell_inf[i].humans) # susceptiple infants
             if length(sus) > 0
                 for k = 1:length(sus)
@@ -319,15 +273,27 @@ end
 export infect_dwells
 
 
-
-#------------------------------
-function reset_humans()
+#---------------------------------
+# Reset Funtions
+#---------------------------------
+function reset_health(h)
     ### reset health's status of kids for the next simulation
-    @inbounds kids_123 = filter(x -> x.agegroup == 1 || x.agegroup == 2 || x.agegroup == 3 ,humans)
-    for i=1:length(kids_123)
-        kids_123[i].health = 0
+    kids = filter(x -> x.agegroup == 1 || x.agegroup == 2 || x.agegroup == 3 || x.agegroup == 4 || x.agegroup == 5,h)
+    @inbounds for i=1:length(kids)
+        kids[i].health = 0
     end
 end
-export reset_humans
+export reset_health
 
+function reset_humandistribution(d)
+    @inbounds for i=1:length(d)
+        for j=1:d[i].size
+            d[i].humans[j] = 0
+        end
+    end
+end
+export reset_humandistribution
+
+
+####################
 end # module
