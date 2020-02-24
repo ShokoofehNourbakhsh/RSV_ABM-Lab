@@ -252,7 +252,7 @@ export apply_charectristics
 
 ###### Assign charectristics to humans: initial populations
 function init_population(h,agedist,agebraks,predist)
-    @inbounds for (i, element) in enumerate(humans)
+    @inbounds for (i, element) in enumerate(h)
         apply_charectristics(element,agedist,agebraks,predist)
     end
 end
