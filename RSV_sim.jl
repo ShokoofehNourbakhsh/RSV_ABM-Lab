@@ -54,7 +54,7 @@ const numInterestedAgeGroup = 5
 # categorical probability distribution of discrete age_groups
 const agedist_Nuk =  Categorical(@SVector[0.007263923,0.008020581,0.008625908,0.026104722,0.026104722,0.026104722,0.022699758,0.310230024,0.564845642])
 const agebraks_Nuk = @SVector[0:2, 3:5, 6:11, 12:23, 24:35, 36:47, 48:59, 60:227, 228:1200] #age_groups in months
-const predist_Nuk = @SVector[0.09375,0.084905660,0.007181329,0.020289855]  # distribution of preterm_ill infants (0-2,3-5,6-11,12-23 months) obtained from data in file 'parameters_Shokoofeh.xlsx'
+const predist_Nuk = @SVector[0.09375,0.084905660,0.007181329,0.043478261]  # distribution of preterm_ill infants (0-2,3-5,6-11,12-23 months) obtained from data in file 'parameters_Shokoofeh.xlsx'
 
 
 ## Dwells Household Parameters
@@ -338,10 +338,13 @@ function init_dwellings(dwells_householdsize)
                 else
                     sizeG9 = rand(0:popG9)
                 end
+
                 G9 = rand(S_min:S_max) # dwells index must be between S_min and S_max
-                dwells[G9].size += sizeG9
-                dwells[G9].avaisize += sizeG9
-                popG9 -= sizeG9
+                if dwells[G9].size >= 6 # shouldnt select previously chosen dwells (more than 5 means it was given size before)
+                    dwells[G9].size += sizeG9
+                    dwells[G9].avaisize += sizeG9
+                    popG9 -= sizeG9
+                end
             end
         end
     end
