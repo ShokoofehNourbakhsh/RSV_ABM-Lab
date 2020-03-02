@@ -338,7 +338,9 @@ function init_dwellings(dwells_householdsize)
                 else
                     sizeG9 = rand(0:popG9)
                 end
+
                 G9 = rand(S_min:S_max) # dwells index must be between S_min and S_max
+                #if dwells[G9].size >= 6 # shouldnt select previously chosen dwells (more than 5 means it was given size before)
                 dwells[G9].size += sizeG9
                 dwells[G9].avaisize += sizeG9
                 popG9 -= sizeG9
