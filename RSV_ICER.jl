@@ -15,7 +15,9 @@ using DataFrames
 using CSV
 using Statistics
 using Random
-using Plots
+#using Plots
+using Bootstrap
+using StatsBase
 
 
 
@@ -26,76 +28,63 @@ using Plots
 # for different baseline and intervention senarios
 
 function main_ICER()
-    senario_0 = @SVector[1,2,3]
-    senario_1 = @SVector[1,2,3,4,5,6,7]
-    l_0 = length(senario_0)
-    l_1 = length(senario_1)
+    sea = [:mild,:moderate,:severe]  #level of outbreak depends on the season
+    for season in sea
+        senario_0 = @SVector[1,2,3]
+        senario_1 = @SVector[1,2,3,4,5,6,7]
+        l_0 = length(senario_0)
+        l_1 = length(senario_1)
 
-    # table to collect ICERs with different baseline senario of S1/S2/S3
-    table = zeros(Float64,(l_0,l_1))
-    CI_low = zeros(Float64,(l_0,l_1))
-    CI_high = zeros(Float64,(l_0,l_1))
-    @inbounds for S_0 = 1:l_0
-        for S_1 = S_0+1:l_1
-            ICER_agegroup, ICER_total = get_ICER(senario_0[S_0],senario_1[S_1]) #ICER with different bases
+        # table to collect ICERs with different baseline senario of S1/S2/S3
+        table = zeros(Float64,(l_0,l_1))
+        CI_min = similar(table,Float64)
+        CI_max = similar(table,Float64)
+        @inbounds for S_0 in senario_0
+            for S_1 = S_0+1:l_1
+                if S_0==2 && S_1==6 continue end
+                if S_0==3 && S_1==7 continue end
 
-            boot_mean, CI_l, CI_h = bootstrap_mean(ICER_total)
+                ICER_total = get_ICER(S_0,S_1,season) #ICER with different bases
 
-            # average of total ICER per hospital stay using different intervention
-            table[S_0,S_1] = mean(boot_mean)
-            CI_low[S_0,S_1] = CI_l
-            CI_high[S_0,S_1] = CI_h
+                # boot_mean, CI_l, CI_h = bootstrap_mean(ICER_total)
+                # average of total ICER per hospital stay per intervention
+                b = bootstrap(mean,ICER_total,BasicSampling(2000))
+                CI = confint(b, BCaConfInt(0.95)) #bias-corrected and accelerated CI
+                table[S_0,S_1] = CI[1][1] #mean
+                CI_min[S_0,S_1] = CI[1][2] # 95% CI_min
+                CI_max[S_0,S_1] = CI[1][3] # 95% CI_max
+            end #base scenario
+        end #alternative scenario
 
-            #----------------------------------------------------------
-            # DataFrame to collect data
-            # names
-            names_age = Symbol.(["ICER_S$S_0$S_1,0to2_H", "ICER_S$S_0$S_1 0to2_P","ICER_S$S_0$S_1 3to5_H", "ICER_S$S_0$S_1 3to5_P",
-            "ICER_S$S_0$S_1 6to11_H","ICER_S$S_0$S_1,6to11_P","ICER_S$S_0$S_1 12to23_H", "ICER_S$S_0$S_1 12to23_P", "ICER_S$S_0$S_1 24to35"])
-
-            df_ICER_agegroup = DataFrame(ICER_agegroup,names_age)
-            #df_ICER_total = DataFrame(ICER = ICER_total)
-
-            #save ICER data
-            CSV.write("ICER_agegroup$S_0$S_1.csv",df_ICER_agegroup)
-            #CSV.write("ICER_total$S_0$S_1.csv",df_ICER_total)
-        end
-    end
-
-    # save ICER table
-    names_table = Symbol.(["S1:NoInter","S2:Paliv<2017","S3:Palivi>2017","S4:ResVax","S5:ResVax/Palivi","S6:LAMA<2017","S7LAMA>2017"])
-    df_ICER_table = DataFrame(table, names_table)
-    insertcols!(df_ICER_table, 1, baseline = ["S1","S2","S3"])
-    CSV.write("ICER_table.csv",df_ICER_table)
-
-
-    return df_ICER_table, CI_low, CI_high
+        # save ICER table
+        names_table = Symbol.(["S0_mean","S1_mean","S2_mean","S3_mean","S4_mean","S5_mean","S6_mean"])
+        names_min = Symbol.(["S0_min","S1_min","S2_min","S3_min","S4_min","S5_min","S6_min"])
+        names_max = Symbol.(["S0_max","S1_max","S2_max","S3_max","S4_max","S5_max","S6_max"])
+        df_ICER_table = DataFrame(table,names_table)
+        df_ICER_CImin = DataFrame(CI_min,names_min)
+        df_ICER_CImax = DataFrame(CI_max,names_max)
+        insertcols!(df_ICER_table, 1, :baseline => ["S0","S1","S2"], makeunique=false)
+        insertcols!(df_ICER_CImin, 1, :baseline => ["S0","S1","S2"], makeunique=false)
+        insertcols!(df_ICER_CImax, 1, :baseline => ["S0","S1","S2"], makeunique=false)
+        CSV.write("ICER_table_$season.csv",df_ICER_table)
+        CSV.write("ICER_CImin_$season.csv",df_ICER_CImin)
+        CSV.write("ICER_CImax_$season.csv",df_ICER_CImax)
+    end #season
 end
 export main_ICER
+
 
 
 ################# Used Functions #######################
 #------------------------------------------------------------------------------
 # Calculate ICER with respect to the S_0:baseline senario and S_1: campared senario
-# ICER = (costS_1 - costS_0)/(effS_1 - effS_0)
+# ICER = -(costS0 - costS1)/(effS0 - effS1)
 #------------------------------------------------------------------------------
-function get_ICER(S_0::Int64,S_1::Int64)
-
-    #-------------- ICER for different agegroups and different simulation
-    C1, E1 = CostEff(S_1)
-    C0, E0 = CostEff(S_0)
-    # calculate cost-effectiveness per hospital stay
-    CE  = similar(C1) # data collecting array::Float64
-    deltaC = C0 - C1
-    deltaE = -(E0 - E1)
-    CE  = deltaC ./ deltaE # for different agegroups per simulation
-    #### (note that CE per agegroup contains NaN and Inf elements- I'll leave it to clean later)
-
-    nrows, ncolm = size(CE)
-    #-------------- Total ICER for different simulations
-    C1_total , E1_total = CostEff_total(S_1)
-    C0_total , E0_total = CostEff_total(S_0)
+function get_ICER(S_0::Int64,S_1::Int64,season::Symbol)
+    #-------------- Total ICER per simulation
+    C1_total, E1_total = CostEff_total(S_1,season) #costs and effects for S1
+    C0_total, E0_total = CostEff_total(S_0,season) #costs and effects for base (S0)
     # calculate ICER per simulation level
-    CE_total = zeros(Float64,nrows)
     CE_total = (C0_total - C1_total) ./ -(E0_total - E1_total)
 
     #clean data from NaN and Inf (zeros in costs or hospital stays)
@@ -103,18 +92,68 @@ function get_ICER(S_0::Int64,S_1::Int64)
     deleteat!(CE_total, CE_total.== -Inf)
     deleteat!(CE_total, CE_total.== NaN)
 
-    return CE, CE_total
+    #save raw ICER values per simulation for plotting
+    df_ICER = DataFrame(ICERs=CE_total)
+    CSV.write("ICER_S$S_0$S_1$season.csv",df_ICER)
+    return CE_total
 end
 export get_ICER
 
 
+function incremental()
+    sea = [:mild,:moderate,:severe]  #level of outbreak depends on the season
+    for season in sea
+        senario_0 = @SVector[1,2,3]
+        senario_1 = @SVector[1,2,3,4,5,6,7]
+        l_0 = length(senario_0)
+        l_1 = length(senario_1)
+
+        #collecting file
+        inc_cost = zeros(500,15)
+        inc_day = similar(inc_cost)
+        i = 1
+        @inbounds for S_0 in senario_0
+            for S_1 = S_0+1:l_1
+                inc_cost[:,i], inc_day[:,i] = get_incremental(S_0,S_1,season)
+                i += 1
+            end # baseline
+        end #alternative scenario
+
+        names = Symbol.(["S0S1","S0S2","S0S3","S0S4","S0S5","S0S6",
+        "S1S2","S1S3","S1S4","S1S5","S1S6",
+        "S2S3","S2S4","S2S5","S2S6"])
+        df_cost = DataFrame(inc_cost,names)
+        df_day = DataFrame(inc_day,names)
+        CSV.write("inc_cost_$season.csv",df_cost)
+        CSV.write("inc_day_$season.csv",df_day)
+
+    end #season
+end
+export incremental
+
+
+function get_incremental(S_0::Int64,S_1::Int64,season::Symbol)
+    #-------------- Total incremental per simulation
+    C1_total, E1_total = CostEff_total(S_1,season) #costs and effects for S1
+    C0_total, E0_total = CostEff_total(S_0,season) #costs and effects for base (S0)
+    # calculate incrementals per simulation level
+    inc_costs = C1_total - C0_total
+    inc_effects = E1_total - E0_total
+
+    #save incremental values per simulation for cost-effectivenss plane
+    #df_incremental = DataFrame(delta_costs=inc_cost, delta_days = inc_effect)
+    #CSV.write("incremental_S$S_0$S_1$season.csv",df_incremental)
+    return inc_costs, inc_effects
+end
+export get_incremental
+
 #---------------------------------------------------------------------------
 # Calculate total costs and total hospital days for different agegroups
 #---------------------------------------------------------------------------
-function CostEff(S::Int64)
+function CostEff(S::Int64,season::Symbol)
     # calculate total costs per agegroup
-    clinic = cost_clinic(S)
-    Hosp, ICU, Hosp_days, ICU_days = cost_HospICU(S)
+    clinic = cost_clinic(S,season)
+    Hosp, ICU, Hosp_days, ICU_days = cost_HospICU(S,season)
 
     if S == 1
         cost_total = clinic + Hosp + ICU
@@ -132,13 +171,12 @@ end
 export CostEff
 
 
-
 #---------------------------------------------------
 # Calculate total costs/days per simulation level
 #---------------------------------------------------
-function CostEff_total(S::Int64)
-    # get costs and effects for all agegroups
-    C_age , E_age = CostEff(S)
+function CostEff_total(S::Int64,season::Symbol)
+    # get costs and effects for all agegroups and health status at the birth
+    C_age , E_age = CostEff(S,season)
     nrows, ncolm = size(C_age)
     C_total = [sum(C_age[sim,:]) for sim=1:nrows]
     E_total = [sum(E_age[sim,:]) for sim=1:nrows]
@@ -146,7 +184,6 @@ function CostEff_total(S::Int64)
     return C_total, E_total
 end
 export CostEff_total
-
 
 
 #----------------------------------------------
@@ -166,7 +203,7 @@ export read_file
 # 1) clinic, 2)regional hosp + tertiary general ward, 3)tertiary ICU
 #----------------------------------------------------
 #------------ Local Clinic ----------------------
-function cost_clinic(S::Int64)
+function cost_clinic(S::Int64,season::Symbol)
     # LAMA and palivi have same efficacy and produces same Hosp/ICU results
     if S == 6 #LAMA < 2017
         S = 2
@@ -178,7 +215,7 @@ function cost_clinic(S::Int64)
     cost_mild = 1569
 
     # reading data file from my working directory
-    _clinic = read_file("clinicS$S.csv")
+    _clinic = read_file("clinicS$S$season.csv")
     clinic = Matrix(_clinic) # convert DataFrame to matrix
 
     # calculate total costs
@@ -189,7 +226,7 @@ export cost_clinic
 
 
 #------------------ Regional Hospital ---------------
-function cost_HospICU(S::Int64)
+function cost_HospICU(S::Int64, season::Symbol)
     # LAMA and palivi have same efficacy and produces same Hosp/ICU results
     if S == 6 # LAMA < 2017
         S = 2
@@ -206,29 +243,23 @@ function cost_HospICU(S::Int64)
     ICUstay = @SVector[5:9,11:16,5:9,11:16,5:9,11:16,   0:0,0:0,0:0]
 
     #-------- reading data file from my working directory
-    _Hosp = read_file("HospS$S.csv")
+    _Hosp = read_file("HospS$S$season.csv")
     Hosp = Matrix(_Hosp) # convert DataFrame to Matrix
 
-    _ICU = read_file("ICUS$S.csv")
+    _ICU = read_file("ICUS$S$season.csv")
     ICU = Matrix(_ICU) # convert DataFrame to Matrix
 
 
 
     #--------------------- total length of hospital days per agegroup
-    # hospital stays per individual are selected and added up for each agegroup
+    # hospital and ICU stays per individual are selected and added up for each agegroup
     daysHosp = similar(Hosp,Int64) #collecting array
+    daysICU = similar(ICU,Int64)
     nrows, ncolm = size(Hosp)
     @inbounds for sim=1:nrows
         Random.seed!(sim)
         for age=1:ncolm
             daysHosp[sim,age] = sum(rand(HospStay[age],Hosp[sim,age]))
-        end
-    end
-    # ICU stays per individual are selected and added up for each agegroup
-    daysICU = similar(ICU,Int64) # collecting array
-    @inbounds for sim=1:nrows
-        Random.seed!(sim)
-        for age=1:ncolm
             daysICU[sim,age] = sum(rand(ICUstay[age],ICU[sim,age]))
         end
     end
@@ -260,9 +291,6 @@ function cost_palivi_LAMA_ResVax(S::Int64)
     #later should replace zero for agegroup 12-23=2657.4
     paliviCost_H = 1065.33 # healthy term for agegroup 0-2 months.
 
-    # assumption cost for maternal vaccine (ResVax)
-    ResVax_p = @SVector[1065.32,1567,2048.4,0.0]
-    ResVax_H = 1065.33
 
     #------ read data file population from my woring directory
     population = read_file("population.csv")
@@ -278,8 +306,8 @@ function cost_palivi_LAMA_ResVax(S::Int64)
         S == 4 #ResVax only
         @inbounds for sim=1:nrow
             Random.seed!(sim)
-            total[sim,1] = ResVax_H # healthy term < 3 months
-            total[sim,2] = ResVax_p[1] # preterm < 3 months
+            total[sim,1] = 1560 # healthy term < 3 months
+            total[sim,2] = 1560 # preterm < 3 months
         end
 
         # ResVax + Palivi
@@ -360,8 +388,9 @@ function bootstrap_mean(ICER::Array{Float64,1})
 
     # CI:95% - confidence interval
     s = sort(boot_delta)
-    delta_head = s[Int(n_boot * 0.975)]
-    delta_tail = s[Int(n_boot * 0.025)]
+    c = 0.95
+    delta_head = s[Int(n_boot * (1+c)/2)]
+    delta_tail = s[Int(n_boot * (1-c)/2)]
 
     CI_low = ICER_mean - delta_head
     CI_high = ICER_mean - delta_tail
@@ -369,10 +398,13 @@ function bootstrap_mean(ICER::Array{Float64,1})
     return boot_mean, CI_low, CI_high
 end
 export bootstrap_mean
-
-
-
-
+"""
+z = 1.959964
+m = mean(ICER_mean)
+s = stdm(ICER_mean, m; corrected=false)
+m + z*(s/sqrt(length(ICER_mean)))
+m - z*(s/sqrt(length(ICER_mean)))
+"""
 #--------------------------------------------------------
 # Histogram Plot of BOOTSTRAP mean distribution of ICERS
 #-------------------------------------------------------
@@ -380,7 +412,7 @@ function histo(ICER)
     boot_mean, CI_low, CI_high = bootstrap_mean(ICER)
     boot_ave = mean(boot_mean)
     h = histogram(boot_mean,
-                    title = "Bootstrap Distribution of median ICERs",
+                    title = "Bootstrap Distribution of mean ICERs",
                     xlabel = "mean",
                     ylabel = "Frequency",
                     legend = false
@@ -393,7 +425,30 @@ export histo
 
 
 
+#------------------------------------------------------------------------
+# independent of the main ICER function save total costs and days for plotting
+function get_costs_days()
+    #collecting array
+    c_total = zeros(Float64,(500,7))
+    d_total = similar(c_total)
 
+    sea = [:mild,:moderate,:severe]
+    for season in sea
+        for sc = 1:7
+            costs,days = CostEff_total(sc, season)
+            c_total[:,sc] = costs
+            d_total[:,sc] = days
+        end
+        # saving the file
+        names = Symbol.(["S$S" for S=1:7]) #[:S1,:S2..., :S7]
+        df_c = DataFrame(c_total,names)
+        df_d = DataFrame(d_total,names)
+        CSV.write("costs$season.csv",df_c)
+        CSV.write("days$season.csv",df_d)
+    end
+end
+export get_costs_days
+#------------------------------------------------
 #--------------------------------------
 # to run in REPL
 @everywhere using .RSV_ICER

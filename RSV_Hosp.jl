@@ -29,13 +29,16 @@ using Random
 function main_Hosp()
     denom = calcu_denominator()
 
-    # calculate Regional Hosp, clinic's patients and
-    # Tertiary Hosp that includs General Ward and ICU cases per all senarios
-    # S1: No Paliv. S2: Paliv. > 2017, S3: Paliv. < 2017, S4: Maternal Vaccine, S5: ResVax+Palivizumab
-    # Note that LAMA produces same results as Palivizumab - no need for re-calculations
-    for S=1:5
-        ClinicHospICU(S,denom)
-    end
+    sea = [:mild,:moderate,:severe]  #level of outbreak depends on the season
+    for season in sea
+        # calculate Regional Hosp, clinic's patients and
+        # Tertiary Hosp that includs General Ward and ICU cases per all senarios
+        # S1: No Paliv. S2: Paliv. > 2017, S3: Paliv. < 2017, S4: Maternal Vaccine, S5: ResVax+Palivizumab
+        # Note that LAMA produces same results as Palivizumab - no need for re-calculations
+        for S=1:5
+            ClinicHospICU(S,season,denom)
+        end #scenarios
+    end #season
 end
 export main_Hosp
 
@@ -52,7 +55,7 @@ function calcu_denominator()
     pop = Matrix(_pop)
 
     # calculate hospitalization rate's denominator per simulation
-    days = 178 # period of one season in days; i.e. January to July
+    days = 180 # period of one season in days; i.e. January to July
     denom = similar(pop,Float64) # data collection array
     denom = (pop .* days)/100000 #apply days/100000 on every pop
 
@@ -79,12 +82,12 @@ export read_file
 # 1- No intervention 2- Palivizumab program < 2017, 3- Palivizumab program > 2017
 # long-acting monoclonal antibody has the same efficacy as palivizumab (no need for seperate calculation)
 # 4- Maternal vaccine (ResVax)
-function ClinicHospICU(S::Int64, denom::Array{Float64})
+function ClinicHospICU(S::Int64,season::Symbol,denom::Array{Float64})
 
     #---------------------------
     # Reading total infection (results) from Agent-based Simulation
     # introduced_inf | inf0to2_total | inf0to2_H | inf0to2_P | ...500×14 DataFrame table
-    infection = read_file("infection.csv") # infections per simulation in a row
+    infection = read_file("infection_$season.csv") # infections per simulation in a row
     _inf = select(infection, Not([1,2,5,8,11])) # take out 'total infection' columns per agegroup
     inf = Matrix(_inf) # convert to matrix
 
@@ -94,7 +97,7 @@ function ClinicHospICU(S::Int64, denom::Array{Float64})
     ################
 
     # introduced_inf | inc0to2_H | inc0to2_P | ...  500X10 DataFrame table
-    incidence =  read_file("incidence.csv") # hosp. incidence rates per agegroup
+    incidence =  read_file("incidence_$season.csv") # hosp. incidence rates per agegroup
     _inc = select(incidence, Not(1)) #take out initial infection column
     inc = Matrix(_inc)
 
@@ -127,9 +130,9 @@ function ClinicHospICU(S::Int64, denom::Array{Float64})
 
     #---------
     # saving data
-    CSV.write("HospS$S.csv",df_Hosp)
-    CSV.write("clinicS$S.csv",df_clinic)
-    CSV.write("ICUS$S.csv",df_ICU)
+    CSV.write("Hosp_S$S$season.csv",df_Hosp)
+    CSV.write("clinic_S$S$season.csv",df_clinic)
+    CSV.write("ICU_S$S$season.csv",df_ICU)
 
     #---------------------------------------------------------------------
     # results
@@ -166,7 +169,7 @@ function calcu_HospClinic(S::Int64, inf::Array{Int64},denom::Array{Float64},inc:
             Random.seed!(sim)
             for j in eachindex(risk_lower) # each agegroup
                 risk = rand(Uniform(risk_lower[j],risk_upper[j]))
-                _Hosp[sim,j+j] = _Hosp[sim,j+j] * (1-risk)
+                _Hosp[sim,j+j] = _Hosp[sim,j+j] .* (1-risk)
             end
         end
 
@@ -174,14 +177,16 @@ function calcu_HospClinic(S::Int64, inf::Array{Int64},denom::Array{Float64},inc:
         # Senario 3: INTERVENTION with Palivizumab for years AFTER 2017 (updated program).
         # Prophylaxis are received by:
         # 1- preterm infants < 6 months, 2- chronically ill kids < 2 years old
-        # 3- healthy term infants < 3 months old
+        # 3- healthy full-term < 5 months old
         #-------------------------------------------------------------------
         if S == 3
             for sim=1:nrows
-                Random.seed!(sim)
-                #reduced-risk factor interval for healthy terms assumed to be the same as healthy premature babies
-                risk = rand(Uniform(0.66,0.90))
-                _Hosp[sim,1] = _Hosp[sim,1] * (1-risk) #column 1 is healthy term 0-2months old
+                # clinical reduced rate for healthy full-term between preintervention (2014-16) and intervention years (2017-19)
+                # data obtained from https://www.sciencedirect.com/science/article/pii/S221133552030139X
+                risk_1 = 0.235 # 0-2 months
+                risk_3 = 0.38  # 3-5 months
+                _Hosp[sim,1] = _Hosp[sim,1] .* (1-risk_1)
+                _Hosp[sim,3] = _Hosp[sim,3] .* (1-risk_3)
             end
         end
 
@@ -193,8 +198,8 @@ function calcu_HospClinic(S::Int64, inf::Array{Int64},denom::Array{Float64},inc:
     elseif S == 4
         # reduced risk intervals of hospitalizations through 90 days serveillance
         # agegroup 0-2mon. both healthy and preterm_ill
-        risk_lower = @SVector[0.167,0.167]
-        risk_upper = @SVector[0.592,0.592]
+        risk_lower = @SVector[0.247,0.319]
+        risk_upper = @SVector[0.619,0.750]
         for sim=1:nrows
             Random.seed!(sim)
             for j in eachindex(risk_lower)
@@ -211,8 +216,8 @@ function calcu_HospClinic(S::Int64, inf::Array{Int64},denom::Array{Float64},inc:
     elseif S == 5
             # reduced risk intervals of hospitalizations through 90 days serveillance
             # agegroup 0-2mon. both healthy and preterm_ill
-            risk_lower = @SVector[0.167,0.167]
-            risk_upper = @SVector[0.592,0.592]
+            risk_lower = @SVector[0.247,0.319]
+            risk_upper = @SVector[0.619,0.750]
             for sim=1:nrows
                 Random.seed!(sim)
                 for j in eachindex(risk_lower)
@@ -263,9 +268,9 @@ function calcu_ICU(S::Int64,Hosp::Array)
     _ICUResVax = similar(Hosp,Float64)
 
     # S1: No Intervention
-    # incidence rate (%) of ICU admission out of hospitalized cases
-    ICU_low = @SVector[0.18,0.18,0.0,0.0,0.0,0.0,0.0,0.0,0.0]
-    ICU_up = @SVector[0.37,0.37,0.37,0.37,0.19,0.19,0.000001,0.0000001,0.0000001]
+    # portion of ICU admission out of hospitalized cases
+    ICU_low = @SVector[0.06,0.0,  0.0,0.0,           0.0,0.0,   0.0,0.0,0.0]
+    ICU_up = @SVector[0.25,1.0,   0.00001,0.00001,   0.17,1.0,   0.000001,0.0000001,0.0000001]
     nrows, ncols = size(Hosp)
     @inbounds for sim=1:nrows
         Random.seed!(sim)
@@ -278,14 +283,16 @@ function calcu_ICU(S::Int64,Hosp::Array)
     #------------------------------------
     # Palivizumab before/after 2017
     if S == 2 || S == 3
-        risk = 0.32836 # reduced risk by palivi. for both healthy and preterm_ill < 12 months old
+        risk_p = 0.6390 # reduced risk preterm_ill < 12 months old
+        risk_H = 0.4385 # reduced risk HFT < 12 months old
         @inbounds for j=1:3 # only preterm_ill < 12 months
-            _ICU[:,[j+j]] = _ICU[:,j+j] .* (1-risk)
+            _ICU[:,[j+j]] = _ICU[:,j+j] .* (1-risk_p)
         end
         #-------------
         # Paliv. > 2017;
         if S == 3
-            _ICU[:,1] = _ICU[:,1] .* (1-risk) # only healthy term with age 0-2 months old
+            _ICU[:,1] = _ICU[:,1] .* (1-risk_H) # healthy term 0-2 months old
+            _ICU[:,3] = _ICU[:,3] .* (1-risk_H) # healthy term 3-5 months old
         end
 
     #-------------------------------------------
@@ -293,7 +300,7 @@ function calcu_ICU(S::Int64,Hosp::Array)
     elseif S == 4 || S == 5
         @inbounds for sim=1:nrows
             Random.seed!(sim)
-            risk_H, risk_p = rand(Uniform(0.321,0.760),2) #reduced-risk factor for both healthy/preterm_ill
+            risk_H, risk_p = rand(Uniform(0.319,0.750),2) #reduced-risk factor for both healthy/preterm_ill
             _ICU[sim,1] = _ICU[sim,1] * (1-risk_H) # healthy term 0-2months old
             _ICU[sim,2] = _ICU[sim,2] * (1-risk_p) # preterm_ill 0-2months old
         end
@@ -301,16 +308,16 @@ function calcu_ICU(S::Int64,Hosp::Array)
         #------------
         # ResVax + Palivi
         if S == 5
-            risk = 0.32836 # reduced risk by palivi. for both healthy and preterm_ill < 12 months old
+            risk_p = 0.6390 # reduced risk preterm_ill < 12 months old
             @inbounds for j=2:3 # only preterm_ill between 3-5 and 6-11 months old
-                _ICU[:,[j+j]] = _ICU[:,j+j] .* (1-risk)
+                _ICU[:,[j+j]] = _ICU[:,j+j] .* (1-risk_p)
             end
         end
     end #if
 
     #------------------------
     # round up ICU to integer
-    ICU = ceil.(Int64,_ICU)
+    ICU = round.(Int64,_ICU)
 
     #---------------------------
     #output of the function

@@ -15,6 +15,8 @@ using Random
 using Parameters
 using DataFrames
 using CSV
+using Match
+
 
 #---------------------------------------------------
 # Construct agent's types as an object
@@ -28,6 +30,7 @@ mutable struct Human
     houseid::Int64
     Human() = new()
 end
+export Human
 
 mutable struct Dwelling
     idx::Int64
@@ -36,6 +39,7 @@ mutable struct Dwelling
     infected::Int64  # infected=1 or not=0
     Dwelling() = new()
 end
+export Dwelling
 
 #----------------------------------------------------
 # Global variables
@@ -43,42 +47,29 @@ end
 # general parameters
 # age populations are downloaded from Census Canada 2016
 # data organized in file 'parameters_Shokoofeh.xlsx'
-const population_Nuk = 13216 # total population of Nunavik
-const dwells_Nuk = 3625 # total privet dwells in Nunavik
-const population_Nut = 1500 #???????
-const dwells_Nut = 5000 #???????
-const region = ["Nunavik","Nunavut"]
-const numInterestedAgeGroup = 5
+const numhumans = 13284 # total population of Nunavik
+const numdwells = 3625 # total privet dwells in Nunavik
+const n_int = 5
 
 ### charectristics parameters
 # categorical probability distribution of discrete age_groups
-const agedist_Nuk =  Categorical(@SVector[0.007263923,0.008020581,0.008625908,0.026104722,0.026104722,0.026104722,0.022699758,0.310230024,0.564845642])
-const agebraks_Nuk = @SVector[0:2, 3:5, 6:11, 12:23, 24:35, 36:47, 48:59, 60:227, 228:1200] #age_groups in months
-const predist_Nuk = @SVector[0.09375,0.084905660,0.007181329,0.020289855]  # distribution of preterm_ill infants (0-2,3-5,6-11,12-23 months) obtained from data in file 'parameters_Shokoofeh.xlsx'
+const agedist =  Categorical(@SVector[0.006925625,0.007452575,0.014528756,0.025971093,0.025971093,0.025971093,0.022583559,0.308641975,0.561954231])
+const agebraks = @SVector[0:2, 3:5, 6:11, 12:23, 24:35, 36:47, 48:59, 60:227, 228:1200] #age_groups in months
+const predist = @SVector[0.093557786,0.076953948,0.046704722,  0.020289855]  # distribution of preterm_ill infants (0-2,3-5,6-11,12-23 months) obtained from data in file 'parameters_Shokoofeh.xlsx'
+
 
 
 ## Dwells Household Parameters
 # total dwells per household size (0 is added for technical trick for writing a signle loop later)
-const dwells_householdsize_Nuk = @SVector[0,755,595,555,585,1135] # householdsize of 1,2,3,4,5:20
-#const dwells_householdsize_Nuk = @SVector[755,595,555,585,1135] # householdsize of 1,2,3,4,5:20
+const householdsize = @SVector[0,755,595,555,585,1135] # householdsize of 1,2,3,4,5:20
 
-
-# infect_dwells Parameters
-const inf_range = @SVector[388:873]
-#const SAR_Nuk = @SVector[0.0,0.0,0.0,0.0,1.0] # Nunavik: secondary attack rate for < 1 , 2, 3 yearsold kids
-const SAR_Nuk = @SVector[0.63,0.63,0.63,0.40,0.27] # Nunavik: secondary attack rate for < 1 , 2, 3 yearsold kids
-#Extreme Test: const SAR_Nuk = @SVector[1,1,1]
-
-# Hospitalization rates in 100,000 population of Nunavik
-#rates corrospond to our agegroups G1 [healthy,preterm_ill] to G5 ****(G4 and G5 are missing for now)?????
-const Lowrates_Nunavik = @SVector[12.8:30.1, 209.50:274.2, 22.3:26.6, 154.08:183.43, 24.1:32.8, 186.22:241.85, 0.0:0.0, 0.0:0.0, 0.0:0.0] # G1:h,p - G2:h,p - G3:h,p - G4:h,p - G5: total
-const Highrates_Nunavik = @SVector[47.6:64.7,338.9:403.55, 31.0:35.2, 212.8:242.13, 41.7:50.2, 297.50:353.11, 0.0:0.0, 0.0:0.0, 0.0:0.0]
-const Midrates_Nunavik = @SVector[30.2:47.5, 274.3:338.8, 26.7:30.9, 183.44:212.79, 32.9:41.6, 241.86:297.49, 0.0:0.0, 0.0:0.0, 0.0:0.0]
-
+#const SAR = @SVector[0.0,0.0,0.0,0.0,1.0] # Nunavik: secondary attack rate for < 1 , 2, 3 yearsold kids
+const SAR = @SVector[0.63,0.63,0.63,0.40,0.27] # Nunavik: secondary attack rate for < 1 , 2, 3 yearsold kids
+#Extreme Test: const SAR = @SVector[1,1,1]
 
 # Agents Arrays
-const humans = Array{Human}(undef, population_Nuk)
-const dwells = Array{Dwelling}(undef, dwells_Nuk)
+const humans = Array{Human}(undef,numhumans)
+const dwells = Array{Dwelling}(undef, numdwells)
 export humans, dwells
 
 
@@ -86,8 +77,9 @@ export humans, dwells
 #               SIMULATION FUNCTION
 #--------------------------------------------------------------
 
-# run simulations for number of si and region "Nunavik or Nunavit"
-function sim(si::Int64,reg::String)
+# run simulations for number of si and intensity of season
+#sea = [:mild,:moderate,:severe]  #level of outbreak depends on the season
+function sim(si::Int64, season::Symbol)
     # collecting infection for different agegroups in df
     names_inf = Symbol.(["introduced_inf","inf0to2_total","inf0to2_H","inf0to2_P",
      "inf3to5_total","inf3to5_H","inf3to5_P","inf6to11_total","inf6to11_H","inf6to11_P",
@@ -105,24 +97,29 @@ function sim(si::Int64,reg::String)
     "inc6to11_H","inc6to11_P","inc12to23_H","inc12to23_P","inc24to35"])
     df_incidence = DataFrame([Float64 for i=1:length(names_inc)], names_inc)
 
+    n=zeros(si) #to collect number of dwells with one infant < 12 months
     # collecting incidence rates for regional hospital admission
-    @inbounds for x=1:si
-        inf_data, pop_data, inc_data = main(x,reg) # calculate infection and population per simulation
 
+
+
+    @inbounds for x=1:si #simulation
+        inf_data, pop_data, inc_data = main(x,season) # calculate infection and population per simulation
         # include data into dataframe for saving format
         push!(df_infection,inf_data)
-        push!(df_population,pop_data)
         push!(df_incidence,inc_data)
+        if season == :mild
+            push!(df_population,pop_data)
+        end
     end
 
     #---------
-    # saving raw results for 500 simulations (infections, population)
-    CSV.write("infection.csv",df_infection)
-    CSV.write("population.csv",df_population)
-    CSV.write("incidence.csv",df_incidence)
-
-    #return raw and average results
-    return df_infection, df_population, df_incidence
+    # saving raw results for 500 simulations
+    CSV.write("infection_$season.csv",df_infection)
+    CSV.write("incidence_$season.csv",df_incidence)
+    if season == :mild
+        CSV.write("population.csv",df_population)
+    end
+    return println("$season season is done")
 end
 export sim
 
@@ -132,33 +129,12 @@ export sim
 #-------------------------------------------------
 # main function to run for one simulation
 #-------------------------------------------------
-function main(simnumber::Int64 , region::String)
+function main(simnumber::Int64, season::Symbol)
     Random.seed!(simnumber)
-
-    # set the global parameters of the model
-    if region == "Nunavik"
-        numhumans  = population_Nuk
-        agedist = agedist_Nuk
-        agebraks = agebraks_Nuk
-        predist = predist_Nuk
-        numdwells = dwells_Nuk
-        householdsize = dwells_householdsize_Nuk
-        SAR = SAR_Nuk
-        Lowrates = Lowrates_Nunavik
-        Highrates = Highrates_Nunavik
-        Midrates = Midrates_Nunavik
-    elseif region == "Nunavit"
-        numhumans  = population_Nut
-        numdwells = dwells_Nut
-        SAR = SAR_Nut
-    end
-    range = inf_range
-    n_int = numInterestedAgeGroup
 
     ## simulation setup functions
     if simnumber == 1
         init_humans()
-        #init_dwellings()
         init_dwellings(householdsize)
     else
         reset_humans(humans)
@@ -169,9 +145,15 @@ function main(simnumber::Int64 , region::String)
     #apply_dwellsSize(dwells,humans,householdsize)
     apply_humandistribution(dwells, humans)
 
-    #infect dwells
-    n_inf = num_inf(range)
-    infect_dwells(dwells, humans, n_inf, SAR, n_int)
+    #--------------infecting dwells
+    # find dwells with minimum one humans < 1 yearsold
+    dwells_to_infect = find_dwells_to_infect()
+    n = length(dwells_to_infect) # total number of eligible dwells to infect
+    range = range_of_inf(n,season) # get range of outbreak depending on season
+
+    # total number of household outbreaks per simulation
+    n_inf = rand(range)
+    infect_dwells(dwells, dwells_to_infect, humans, n_inf, SAR, n_int)
 
     #-----------------
     #------ Results (objective agegroups are children under 3 years old)
@@ -180,7 +162,7 @@ function main(simnumber::Int64 , region::String)
     infection, population = calcu_infection_population(n_int)
 
     # Choose hosp incidence rates for every agegroup per simulation
-    incidence = choose_incidence(n_int,n_inf,Lowrates,Highrates,Midrates)
+    incidence = choose_incidence(n_int,season)
 
     # add initial infection to the first coloumn
     pushfirst!(infection, n_inf)
@@ -209,12 +191,13 @@ export main
 function init_humans()
     @inbounds for i = 1:length(humans)
         humans[i] = Human()              ## create an empty human
-        humans[i].idx = i
-        humans[i].health = 0
-        humans[i].age = 0
-        humans[i].agegroup = 0
-        humans[i].preterm_ill = false
-        humans[i].houseid = 0
+        x = humans[i]
+        x.idx = i
+        x.health = 0
+        x.age = 0
+        x.agegroup = 0
+        x.preterm_ill = false
+        x.houseid = 0
     end
 end
 export init_humans
@@ -226,7 +209,7 @@ function apply_charectristics(x,agedist,agebraks,predist)
     x.agegroup = _agegp
     x.age = rand(agebraks[_agegp])
 
-    #assign preterm if < 1 years old
+    #assign preterm_ill if < 1 years old
     if _agegp == 1
         if rand() < predist[1]
             x.preterm_ill = true
@@ -313,8 +296,9 @@ export apply_dwellsSize
 function init_dwellings(dwells_householdsize)
     for i = 1:length(dwells)
         dwells[i] = Dwelling()  ## create an empty house
-        dwells[i].idx = i
-        dwells[i].infected = 0
+        x = dwells[i]
+        x.idx = i
+        x.infected = 0
     end
     S_min = 1
     S_max = 0
@@ -381,19 +365,39 @@ export apply_humandistribution
 # Introducing infection to the households
 #-------------------------------------------------
 ## start infecting individuals who bring infection to the home
-function num_inf(r)
-    n_inf = rand(r[1])
-    return n_inf
-# Extreme Test: n_inf = length(dwells)
+
+function get_percentage_of_outbreak(sea::Symbol)
+    ret = @match sea begin
+        :mild => StaticArrays.@SVector[0.3,0.5]
+        :moderate => StaticArrays.@SVector[0.5,0.7]
+        :severe => StaticArrays.@SVector[0.7,0.9]
+        #_ => error("what is the season?")
+    end
+    return ret
 end
-export num_inf
+export get_percentage_of_outbreak
+
+
+function range_of_inf(n::Int64,season::Symbol)
+    #input is number of dwells with infants <1 yearsold
+    p = get_percentage_of_outbreak(season) #mild/moderate/severe season?
+    r1 = floor(Int,p[1]*n)
+    r2 = floor(Int,p[2]*n)
+    range = r1:r2
+    # gives back number of eligiblie dwells to infect
+    # and the 30 to 50 % range of dwell outbreaks
+    return range
+end
+export range_of_inf
+
+
 
 #-------------Find eligible dwells to infect
 function find_dwells_to_infect()
-    # find children under 3 years old
-    children_under3years = filter(x-> x.agegroup ==1 || x.agegroup ==2 || x.agegroup ==3 || x.agegroup ==4 || x.agegroup ==5 ,humans)
-    # find houses of which these small children under 3 residing in it
-    dwells_to_infect = [children_under3years[i].houseid for i=1:length(children_under3years)]
+    # find children under 1 years old
+    children_under1years = filter(x-> x.agegroup < 4 ,humans)
+    # find houses of which these infants < 1 yearold residing in it
+    dwells_to_infect = [children_under1years[i].houseid for i=1:length(children_under1years)]
     unique(dwells_to_infect) # remove duplicate houses
     return dwells_to_infect
 end
@@ -404,9 +408,8 @@ export find_dwells_to_infect
 # d:dwells, h:humans, n_inf: initial infection given to dwells,
 # SAR:secondary attack rates, n_int:number of objective agegroup we are interested in
 #-----------------------------------------------------------
-function infect_dwells(d, h, n_inf, SAR, n_int)
-    dwells_to_infect = find_dwells_to_infect() # find dwells with minimum one human under 3 yearsold
-    dwells_inf = sample(dwells_to_infect, n_inf; replace = false)  # infected dwells
+function infect_dwells(d, d_to_infect, h, n_inf, SAR, n_int)
+    dwells_inf = sample(d_to_infect, n_inf; replace = false)  # infected dwells
     sec_att_rate = SAR
     @inbounds for i = 1:n_inf
         infected_id = dwells_inf[i]
@@ -424,6 +427,7 @@ function infect_dwells(d, h, n_inf, SAR, n_int)
     end
 end
 export infect_dwells
+
 
 #--------------------------------------------------------------
 #                   Infection & Population
@@ -478,57 +482,70 @@ function calcu_infection_population(n_int::Int64)
 end
 export calcu_infection_population
 
+
+
+
 #--------------------------------------------------------------------------
 # Regional Hosp Incidence Rates (initial incidence)
 #-------------------------------------------------------------------------
 # randomly choose an incidence rate for regional hospital admissions in every simulation (500 run) from given data range (clinical information)
 # input; n_int::number of agegroups, n_inf:: number of introduced infected dwells
-function choose_incidence(n_int::Int64,n_inf::Int64,Lowrates,Highrates,Midrates)
+function choose_incidence(n_int::Int64, season::Symbol)
     # data-collection vectors
     #inc = zeros(Float64,n_int*2-1) # hosp incidence rates
     inc = zeros(Float64,n_int*2-1)
 
+    # get incidence range which depending on the season (mild/moderate/severe)
+    rate = get_incidence_of_season(season)
+
     # iteration for our collecting arrays
     itr =@SVector[1,3,5,7,9]
     @inbounds for i in itr
-        # selecting random incidence rate from (low/mid/high (873-388)/3) possible range of rates
-        # choose incidence rate for healthy or preterm_ill
-        if n_inf <= 550 #low initial infection (low season)
-            inc[i] = rand(Lowrates[i]) #healthy
-            inc[i+1] = rand(Lowrates[i+1]) #preterm_ill
-        elseif n_inf >= 712 #high initial infection (peak of the season)
-            inc[i] = rand(Highrates[i])
-            inc[i+1] = rand(Highrates[i+1])
-        else #(mid season)
-            inc[i] = rand(Midrates[i])
-            inc[i+1] = rand(Midrates[i+1])
-        end
+        # selecting random incidence rate
+        inc[i] = rand(rate[i]) #healthy
+        inc[i+1] = rand(rate[i+1]) #preterm_ill
     end
     return inc
 end
 export choose_incidence
 
 
+# Hospitalization rates per 100,000 person-time for Nunavik (provided by collaborator)
+function get_incidence_of_season(season::Symbol)
+    s = @match season begin
+        #rates corrospond to our agegroups G1 [healthy,preterm_ill] to G5 ****(G4 and G5 are missing for now)?????
+        # G1:h,p - G2:h,p - G3:h,p - G4:h,p - G5: total
+        :mild => StaticArrays.@SVector[13.6:31.1, 135.67:181.9, 23.6:27.3, 152.63:160.2, 15.6:20.0, 108.5:145.2, 0.0:0.0, 0.0:0.0, 0.0:0.0]
+        :moderate => StaticArrays.@SVector[31.2:48.7,182.0:228.1, 27.4:31.9, 160.3:167.8, 20.1:24.4, 145.3:181.8, 0.0:0.0, 0.0:0.0, 0.0:0.0]
+        :severe => StaticArrays.@SVector[48.8:66.2,228.2:274.35, 32.0:36.0, 167.9:175.39, 24.5:28.7, 181.9:218.51, 0.0:0.0, 0.0:0.0, 0.0:0.0]
+    end
+
+    return s
+end
+export get_incidence_of_season
+
 #---------------------------------
 # Reset Functions
 #---------------------------------
 # reset health and houseid for the next simulation
 function reset_humans(h)
-    @inbounds for i=1:length(h)
-        h[i].health = 0
-        h[i].age = 0
-        h[i].agegroup = 0
-        h[i].preterm_ill = false
-        h[i].houseid = 0
+    for i=1:length(h)
+        x = h[i]
+        x.health = 0
+        x.age = 0
+        x.agegroup = 0
+        x.preterm_ill = false
+        x.houseid = 0
     end
 end
 export reset_humans
 
 function reset_dwells(d)
-    @inbounds for i=1:length(d)
-        si = d[i].size
-        d[i].avaisize = si
-        d[i].infected = 0
+    for i=1:length(d)
+        x = d[i]
+        si = x.size
+        x.avaisize = si
+        x.infected = 0
     end
 end
 export reset_dwells
