@@ -31,6 +31,7 @@ function bootdata_increments_ICER()
     for season in sea
         #load simulation data as a table
         _dat = read_file("CostEff_datatable_$season.csv")
+        _dat = select(_dat,Not(15:35)) # keep only total costs and total QALY
         dat = Matrix(_dat)
 
         # prepare data for bootsrap function to iterate by coloumn
@@ -44,22 +45,18 @@ function bootdata_increments_ICER()
         n_boot = 1000
         b = bootstrap(bootfc_increments_ICER,d,BasicSampling(n_boot))
 
-        # bootfc_increments_ICER produces vector of 3*15 (15 is total compared scenarios)
+        # bootfc_increments_ICER produces vector of 3*6 (6 is total compared scenarios)
         # seperate results from b into ICER, delta_cost, delta_day
-        boot_ICER = zeros(Float64,(n_boot,15))
+        boot_ICER = zeros(Float64,(n_boot,6))
         boot_deltaCost = similar(boot_ICER)
-        boot_deltaDay = similar(boot_ICER)
+        boot_deltaQ = similar(boot_ICER)
         # table for reporting final ICER result plus 95% confidence interval
-        ICER_table = zeros(Int64,(3,15))
-        for j=1:15
+        ICER_table = zeros(Int64,(3,6))
+        for j=1:6
             boot_ICER[:,j] = b.t1[j]
-            boot_deltaCost[:,j] = b.t1[j+15]
-            boot_deltaDay[:,j] = b.t1[j+30]
+            boot_deltaCost[:,j] = b.t1[j+6]
+            boot_deltaQ[:,j] = b.t1[j+12]
 
-            # since palivizumab and nirsevimab have same efficacy,
-            # their delta_cost=0 and therefore ICER=-inf for scenarios (2,6)--> idx=10 and (3,7)--> idx=15
-            # we skip getting confint() for these scenarios
-            if j==10 || j==15 continue end
             # we only want 95% CI of ICER (choosing index 1:15)
             # outputs of confint() are mean, lower_CI and uppper bound CI
             # BCaConfInt() means bias-corrected accelerated method
@@ -71,17 +68,15 @@ function bootdata_increments_ICER()
         end
 
         # save bootstrapped data
-        names = Symbol.(["S0S1","S0S2","S0S3","S0S4","S0S5","S0S6",
-        "S1S2","S1S3","S1S4","S1S5","S1S6",
-        "S2S3","S2S4","S2S5","S2S6"])
+        names = Symbol.(["S0S1","S0S2","S0S3","S1S4","S2S5","S3S6"])
         df_bootICER = DataFrame(boot_ICER,names)
         df_bootDeltaCost = DataFrame(boot_deltaCost,names)
-        df_bootDeltaDay = DataFrame(boot_deltaDay,names)
+        df_bootDeltaQ = DataFrame(boot_deltaQ,names)
         df_ICERtable = DataFrame(ICER_table,names)
 
         CSV.write("bootICER_$season.csv",df_bootICER)
         CSV.write("bootDeltaCost_$season.csv",df_bootDeltaCost)
-        CSV.write("bootDeltaDay_$season.csv",df_bootDeltaDay)
+        CSV.write("bootDeltaQALY_$season.csv",df_bootDeltaQ)
         CSV.write("ICERtable_$season.csv",df_ICERtable)
     end
 end
@@ -89,45 +84,69 @@ export bootdata_increments_ICER
 
 # ------ function used for bootstrap() in above
 # statistic of the interest
-# bootfc will perform mean, difference of means (alternative - base),ratio of differences (delta_cost/delta_day)
+# bootfc will perform mean, difference of means (alternative - base),ratio of differences (delta_cost/delta_QALY)
 function bootfc_increments_ICER(d)
     m = mean(d)
-    senario_0 = @SVector[1,2,3]
-    senario_1 = @SVector[1,2,3,4,5,6,7]
-    l_0 = length(senario_0)
-    l_1 = length(senario_1)
+    scenario_0 = @SVector[1]
+    scenario_1 = @SVector[2,3,4]
 
     #collecting file
-    cost_inc = zeros(Float64,15)
-    day_inc = similar(cost_inc)
+    cost_inc = zeros(Float64,6)
+    Q_inc = similar(cost_inc)
     ICER = similar(cost_inc)
     i = 1
-    @inbounds for S_0 in senario_0
-        for S_1 = S_0+1:l_1
+    @inbounds for S_0 in scenario_0
+        for S_1 in scenario_1
             delta_c = m[S_1] - m[S_0]
-            delta_d = -(m[S_1+7] - m[S_0+7])
+            delta_q = m[S_1+7] - m[S_0+7]
             cost_inc[i] = delta_c
-            day_inc[i] = delta_d
-            ICER[i] = delta_c / delta_d
+            Q_inc[i] = delta_q
+            ICER[i] = delta_c / delta_q
             i += 1
         end # baseline
     end #alternative
 
-    # at the end, bootfc delivers big vector of 15 points of ICERs, 15points of delta_cost and 15 points of delta_days
-    return append!(ICER, append!(cost_inc,day_inc))
+    S_0 = 2
+    S_1 = 5
+    delta_c = m[S_1] - m[S_0]
+    delta_q = m[S_1+7] - m[S_0+7]
+    cost_inc[i] = delta_c
+    Q_inc[i] = delta_q
+    ICER[i] = delta_c / delta_q
+    i += 1
+
+    S_0 = 3
+    S_1 = 6
+    delta_c = m[S_1] - m[S_0]
+    delta_q = m[S_1+7] - m[S_0+7]
+    cost_inc[i] = delta_c
+    Q_inc[i] = delta_q
+    ICER[i] = delta_c / delta_q
+    i += 1
+
+    S_0 = 4
+    S_1 = 7
+    delta_c = m[S_1] - m[S_0]
+    delta_q = m[S_1+7] - m[S_0+7]
+    cost_inc[i] = delta_c
+    Q_inc[i] = delta_q
+    ICER[i] = delta_c / delta_q
+
+    # at the end, bootfc delivers big vector of 6 points of ICERs, 6 points of delta_cost and 6 points of delta_q
+    return append!(ICER, append!(cost_inc,Q_inc))
 end
 export bootfc_increments_ICER
 
 
 
 
-
+"""
 ###### COST MINIMIZED -------
 function bootdata_costminimized()
     sea = [:mild,:moderate,:severe]  #level of outbreak depends on the season
     for season in sea
         #load simulation data as a table
-        _dat = read_file("CostEff_S1256$season.csv")
+        _dat = read_file("CostEff_S1256season.csv")
         dat = Matrix(_dat)
         r,c = size(dat)
         d = [dat[i,:] for i=1:r] # put all columns of one simulation in one vector
@@ -149,7 +168,7 @@ function bootdata_costminimized()
         # save bootstrapped data
         names = Symbol.(["S1S5","S2S6"])
         df_CMtable = DataFrame(CM_table,names)
-        CSV.write("CMtable_$season.csv",df_CMtable)
+        CSV.write("CMtable_season.csv",df_CMtable)
     end
 end
 export bootdata_costminimized
@@ -193,23 +212,42 @@ function bootbfc()
 
 end
 export bootbfc
+"""
 ################# Used Functions ########################------------------------------------------------------------------
 #-------------- create data table of raw costs and days per scenarios (simulation raw data)
+# MAIN function to create table of total costs and total QALY per scenario
 function CostEff_datatable()
     sea = [:mild,:moderate,:severe]
     for season in sea
 
+        inf = get_inf(season)
+
         #collecting array (costs for 7 scenarios and days for 7 scenarios)
-        table = zeros(Float64,(500,14))
+        #table = zeros(Float64,(500,14))
+        table = zeros(Float64,(500,35))
         for S= 1:7
-            costs,days = CostEff_total(S, season)
-            table[:,S] = costs
-            table[:,S+7] = days
+            costs, QALY, Q_clinic, Q_GW, Q_ICU  = CostEff_total(S, season)
+            if S == 1
+                Q_averted = 0
+            else
+                Q_averted = Eff_averted(S,season,inf)
+            end
+            table[:,S]   = costs
+            table[:,S+7] = QALY .+ Q_averted
+            table[:,S+14]= Q_clinic
+            table[:,S+21]= Q_GW
+            table[:,S+28]= Q_ICU
         end
         # saving the file
         names = Symbol.(["costS$S" for S=1:7]) #[:costS1,:costS2..., :costS7]
-        n = Symbol.(["dayS$S" for S=1:7]) #[:dayS1... :dayS7]
+        n = Symbol.(["QALYS$S" for S=1:7]) #[:QALYS1... :QALYS7]
+        m = Symbol.(["Qclin$S" for S=1:7])
+        R = Symbol.(["QGW$S" for S=1:7])
+        P = Symbol.(["QICU$S" for S=1:7])
         append!(names,n)
+        append!(names,m)
+        append!(names,R)
+        append!(names,P)
         df_table = DataFrame(table,names)
         CSV.write("CostEff_datatable_$season.csv",df_table)
     end
@@ -217,41 +255,105 @@ end
 export CostEff_datatable
 
 
+#-----------------
+# get clean infection for calculation.
+function get_inf(season::Symbol)
+    #---------------------------
+    # Reading total infection (results) from Agent-based Simulation
+    # introduced_inf | inf0to2_total | inf0to2_H | inf0to2_P | ...500×14 DataFrame table
+    infection = read_file("infection_$season.csv") # infections per simulation in a row
+    _inf = select(infection, Not([1,2,5,8,11])) # take out 'total infection' columns per agegroup
+    inf = Matrix(_inf) # convert to matrix
 
+    ######### due to lack of hospitalization data for 2 and 3 years old, put zeros on their respective columns
+    nrows, ncolm = size(inf)
+    inf[:,[9,8,7]] = zeros(Int64,(nrows,3))
+
+    return inf
+end
+export get_inf
+
+
+#------------- calculated QALY for averted medically-atendent RSV infection
+function Eff_averted(S::Int64,season::Symbol,inf::Array{Int64,2})
+
+    # reading data file from my working directory
+    _clinic = read_file("clinic_S$S$season.csv")
+    clinic = Matrix(_clinic) # convert DataFrame to matrix
+
+    #-------- reading data file from my working directory
+    _GW = read_file("GW_S$S$season.csv")
+    GW = Matrix(_GW) # convert DataFrame to Matrix
+
+    _ICU = read_file("ICU_S$S$season.csv")
+    ICU = Matrix(_ICU) # convert DataFrame to Matrix
+
+    avert = inf - (clinic + GW + ICU)
+
+
+    Q_avert = similar(avert,Float64)
+    nrows, ncolm = size(Q_avert)
+    @inbounds for sim=1:nrows
+        Random.seed!(sim)
+        for age=1:ncolm
+            n    = avert[sim,age]
+
+            #calculate healthy QALY
+            # disutilities obtained from
+            #ref: Roy LM. Deriving health utility weights for infants with Respiratory Syncytial Virus (RSV)
+            #(T). Univer- sity of British Columbia. Available: https://open.library.ubc.ca/cIRcle/collections/24/items/1.0074259.
+            U2 = rand(Beta(8.41,1.15),n) # quality of life < 16 years old mean 0.88 HEALTHY
+            Q_avert[sim,age] = sum(U2) # hospitalization
+        end
+    end
+
+    # add up all age groups
+    Q_avert_to = [sum(Q_avert[sim,:]) for sim=1:nrows]
+
+ return Q_avert_to
+
+end
+export Eff_averted
 #---------------------------------------------------
 # Calculate total costs/days per simulation level
 #---------------------------------------------------
 function CostEff_total(S::Int64,season::Symbol)
     # get costs and effects for all agegroups and health status at the birth
-    C_age , E_age = CostEff(S,season)
+    C_age , E_age, Q_clinic, Q_GW, Q_ICU = CostEff(S,season)
     nrows, ncolm = size(C_age)
     C_total = [sum(C_age[sim,:]) for sim=1:nrows]
     E_total = [sum(E_age[sim,:]) for sim=1:nrows]
+    Q_clin  = [sum(Q_clinic[sim,:]) for sim=1:nrows]
+    Q_W     = [sum(Q_GW[sim,:]) for sim=1:nrows]
+    G_CU    = [sum(Q_ICU[sim,:]) for sim=1:nrows]
 
-    return C_total, E_total
+    return C_total, E_total, Q_clin, Q_W , G_CU
 end
 export CostEff_total
+
+
 
 #---------------------------------------------------------------------------
 # Calculate total costs and total hospital days for different agegroups
 #---------------------------------------------------------------------------
 function CostEff(S::Int64,season::Symbol)
     # calculate total costs per agegroup
-    clinic = cost_clinic(S,season)
-    Hosp, ICU, Hosp_days, ICU_days = cost_HospICU(S,season)
+    clinic, Q_clinic = cost_clinic(S,season)
+    GW, ICU, Q_GW, Q_ICU = cost_HospICU(S,season)
 
     if S == 1
-        cost_total = clinic + Hosp + ICU
+        cost_total = clinic + GW + ICU
     else
         prophylaxis = cost_palivi_LAMA_ResVax(S)
-        cost_total = clinic + Hosp +  ICU + prophylaxis
+        cost_total = clinic + GW +  ICU + prophylaxis
     end
 
-    # calculate total hospital lengths of stay
-    days_total = Hosp_days + ICU_days
+
+    # calculate total QALY from 1 year period
+    Q_total = Q_clinic + Q_GW + Q_ICU
 
     # results
-    return cost_total, days_total
+    return cost_total, Q_total,Q_clinic,Q_GW, Q_ICU
 end
 export CostEff
 
@@ -262,13 +364,6 @@ export CostEff
 
 #------------ Local Clinic ----------------------
 function cost_clinic(S::Int64,season::Symbol)
-    # LAMA and palivi have same efficacy and produces same Hosp/ICU results
-    if S == 6 #LAMA < 2017
-        S = 2
-    elseif S == 7 #LAMA > 2017
-        S = 3
-    end
-
     # average cost per case for mild RSV infection (no hospital admission)
     cost_mild = 1569
 
@@ -276,33 +371,62 @@ function cost_clinic(S::Int64,season::Symbol)
     _clinic = read_file("clinic_S$S$season.csv")
     clinic = Matrix(_clinic) # convert DataFrame to matrix
 
+    inf_day = similar(clinic,Float64)
+    Q_clinic = similar(clinic,Float64)
+
+
     # calculate total costs
     cost = clinic .* cost_mild
-    return cost
+
+    # calculate infection days
+    nrows, ncolm = size(clinic)
+    @inbounds for sim=1:nrows
+        Random.seed!(sim)
+        for age=1:ncolm
+            n = clinic[sim,age] # number of patients
+            day = get_inf_day(n) # total number of infection days per agegroup
+
+            #calculate QALY
+            # disutilities obtained from
+            #ref: Roy LM. Deriving health utility weights for infants with Respiratory Syncytial Virus (RSV)
+            #(T). University of British Columbia. Available: https://open.library.ubc.ca/cIRcle/collections/24/items/1.0074259.
+            # inout is (day,mean,standard error)
+            Q_clinic[sim,age] = sum(get_QALY(n,day,0.16,0.02)) # outpatient visits
+        end
+    end
+
+    return cost, Q_clinic
 end
 export cost_clinic
 
 
+
+#------- calculate infection days ---------------
+function get_inf_day(n::Int64)
+    expo = rand(Uniform(4.54,5.37),n) # exposure days
+    symp = rand(Uniform(5.68,6.63),n) # symptomatic days
+    inf_day = expo + symp
+
+    return inf_day
+end
+export get_inf_day
 #------------------ Regional Hospital ---------------
 function cost_HospICU(S::Int64, season::Symbol)
-    # LAMA and palivi have same efficacy and produces same Hosp/ICU results
-    if S == 6 # LAMA < 2017
-        S = 2
-    elseif S == 7 #LAMA > 2017
-        S = 3
-    end
     #------- Parameters
     # ------- AVERAGE COSTS per inpatient case ended up to hospital or ICU
-    cost_Hosp = 16946
+    cost_GW = 16946
     cost_ICU = 80590
 
-    # range for minimum stay in hospital or ICU per agegroups
-    HospStay = @SVector[1:8,1:8,1:7,1:7,1:10,1:10,  0:0,0:0,0:0]
-    ICUstay = @SVector[2:25,2:25,2:25,2:25,4:15,4:15,   0:0,0:0,0:0]
+    # range for minimum stay in general ward or ICU per agegroups
+    #GWStay = @SVector[1:8,1:8,1:7,1:7,1:10,1:10,  0:0,0:0,0:0]
+    #ICUstay = @SVector[2:25,2:25,2:25,2:25,4:15,4:15,   0:0,0:0,0:0]
+
+    GWStay = @SVector[3:3,3:3,3:3,3:3,4:4,4:4,  0:0,0:0,0:0]
+    ICUstay = @SVector[12.5:12.5,12.5:12.5,12.5:12.5,12.5:12.5,9.5:9.5,9.5:9.5,   0:0,0:0,0:0]
 
     #-------- reading data file from my working directory
-    _Hosp = read_file("Hosp_S$S$season.csv")
-    Hosp = Matrix(_Hosp) # convert DataFrame to Matrix
+    _GW = read_file("GW_S$S$season.csv")
+    GW = Matrix(_GW) # convert DataFrame to Matrix
 
     _ICU = read_file("ICU_S$S$season.csv")
     ICU = Matrix(_ICU) # convert DataFrame to Matrix
@@ -311,32 +435,69 @@ function cost_HospICU(S::Int64, season::Symbol)
 
     #--------------------- total length of hospital days per agegroup
     # hospital and ICU stays per individual are selected and added up for each agegroup
-    daysHosp = similar(Hosp,Int64) #collecting array
-    daysICU = similar(ICU,Int64)
-    nrows, ncolm = size(Hosp)
+    daysGW  = similar(GW ,Float64) #collecting array
+    daysICU = similar(ICU,Float64)
+    Q_GW    = similar(ICU,Float64)
+    Q_ICU   = similar(ICU,Float64)
+
+    nrows, ncolm = size(GW)
     @inbounds for sim=1:nrows
         Random.seed!(sim)
         for age=1:ncolm
-            daysHosp[sim,age] = sum(rand(HospStay[age],Hosp[sim,age]))
-            daysICU[sim,age] = sum(rand(ICUstay[age],ICU[sim,age]))
+            n_GW   = GW[sim,age]
+            n_ICU  = ICU[sim,age]
+            daysGW  = rand(GWStay[age],n_GW)
+            daysICU = rand(ICUstay[age],n_ICU)
+
+            #calculate QALY
+            # disutilities obtained from
+            #ref: Roy LM. Deriving health utility weights for infants with Respiratory Syncytial Virus (RSV)
+            #(T). Univer- sity of British Columbia. Available: https://open.library.ubc.ca/cIRcle/collections/24/items/1.0074259.
+            # inout is (day,mean,standard error)
+            Q_GW[sim,age] = sum(get_QALY(n_GW,daysGW,0.41,0.03)) # hospitalization
+            Q_ICU[sim,age]  = sum(get_QALY(n_ICU,daysICU,0.60,0.03)) # ICU admission
         end
     end
 
 
+
     #-------- total cost for all hospital/ICU admissions per agegroup
-    # note: Hosp includes patients that might end up in ICU - their costs consists in cost_ICU
-    costsHosp = similar(Hosp,Float64) #collecting array
-    costsHosp = (Hosp - ICU) .* cost_Hosp # medium-infected cases
+    costsGW = similar(GW,Float64) #collecting array
+    costsGW = GW .* cost_GW
 
     costsICU = similar(ICU,Float64) #collecting array
     costsICU = ICU .* cost_ICU # sever infected cases
 
-    return costsHosp, costsICU, daysHosp, daysICU
+    return costsGW, costsICU, Q_GW, Q_ICU
 end
 export cost_HospICU
 
 
+#---------calculate QALY
+# mu is mean and se is standard error
+function get_QALY(n,day,mu,se)
+    alpha, beta = get_beta_parm(mu, se)
+    disutil = rand(Beta(alpha,beta),n) # disutility
+    U1 = 1 .- disutil # utility while affecting by RSV
+    U2 = rand(Beta(8.41,1.15),n) # quality of life < 16 years old mean 0.88
+    L = day ./ 365
+    Q = U1 .* L + U2 .* (1 .- L)
+    #sr = 0.015
+    #Q = U1 .* (1+r).^L + U2 .* (1+r).^(1 .- L)
+    #Q = U1 .* ((1 .- exp.(-r .* L)) ./ r)
 
+    return Q
+end
+export get_QALY
+
+# ------- estimate parameters for beta distribution
+function get_beta_parm(mu::Float64, se::Float64)
+    var = se^2
+    alpha = ((1 - mu) / var - 1 / mu) * mu ^ 2
+    beta = alpha * (1 / mu - 1)
+    return alpha, beta
+end
+export get_beta_parm
 
 #-----------------------------------------------------------
 # Costs associate with intervention of palivizumab
@@ -363,27 +524,27 @@ function cost_palivi_LAMA_ResVax(S::Int64)
     nrow, ncolm = size(total)
 
     # Maternal Vaccine (ResVax)
-    if S ==4 || S == 5
-        S == 4 #ResVax only
+    if S ==4 || S == 7
+        #ResVax only
         @inbounds for sim=1:nrow
             Random.seed!(sim)
             total[sim,1] = 1560 # healthy term < 3 months
             total[sim,2] = 1560 # preterm < 3 months
         end
 
-        # ResVax + Palivi
-        if S == 5
-            # five doses for only preterm_ill > 3 months
+        # ResVax + LAMA
+        if S == 7
+            # one doses for only preterm_ill > 3 months
             @inbounds for sim=1:nrow
                 Random.seed!(sim)
                 for j=2:l_p
-                    total[sim,j+j] = 5 * paliviCost_p[j]
+                    total[sim,j+j] = paliviCost_p[j] #LAMA price same as paliv.
                 end
             end
         end
 
-    # palivi. or LAMA < 2017
-    elseif S == 2 || S == 6
+    # palivi. or LAMA for high risk
+    elseif S == 2 || S == 3
         @inbounds for j=1:l_p
             for sim=1:nrow
                 Random.seed!(sim)
@@ -391,24 +552,24 @@ function cost_palivi_LAMA_ResVax(S::Int64)
                 # no cost for healthy terms; remained zero
                 if S == 2 #Palivi
                     total[sim,j+j] = 5 .* paliviCost_p[j]
-                elseif S == 6 #LAMA
+                elseif S == 3 #LAMA
                     total[sim,j+j] = paliviCost_p[j]
                 end
             end
         end
 
-    # palivi. or LAMA > 2017
-    elseif S == 3 || S == 7
+    # palivi. or LAMA for high risk + healthy
+    elseif S == 5 || S == 6
         @inbounds for sim=1:nrow
             Random.seed!(sim)
-            if S == 3 #Palivi
+            if S == 5 #Palivi
                 # cost for healthy terms < 3 months old
                 total[sim,1] = 5 .* paliviCost_H
                 for j=1:l_p
                     # five doses for only preterm_ill
                     total[sim,j+j] = 5 .* paliviCost_p[j]
                 end
-            elseif S == 7 #LAMA
+            elseif S == 6 #LAMA
                 # cost for healthy terms < 3 months old
                 total[sim,1] = paliviCost_H
                 for j=1:l_p
