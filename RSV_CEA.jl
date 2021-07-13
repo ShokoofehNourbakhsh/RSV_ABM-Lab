@@ -288,22 +288,24 @@ function Eff_averted(S::Int64,season::Symbol,inf::Array{Int64,2})
     _ICU = read_file("ICU_S$S$season.csv")
     ICU = Matrix(_ICU) # convert DataFrame to Matrix
 
-    avert = inf - (clinic + GW + ICU)
+    # test if total clin,GW and ICU are equal to initial infection
+    total  = GW + clinic + ICU
+    avert   = inf - total
 
-
-    Q_avert = similar(avert,Float64)
-    nrows, ncolm = size(Q_avert)
+    nrows, ncolm = size(avert)
+    Q_avert = zeros(nrows,ncolm)
     @inbounds for sim=1:nrows
         Random.seed!(sim)
         for age=1:ncolm
-            n    = avert[sim,age]
+            n = avert[sim,age]
 
             #calculate healthy QALY
             # disutilities obtained from
             #ref: Roy LM. Deriving health utility weights for infants with Respiratory Syncytial Virus (RSV)
             #(T). Univer- sity of British Columbia. Available: https://open.library.ubc.ca/cIRcle/collections/24/items/1.0074259.
-            U2 = rand(Beta(8.41,1.15),n) # quality of life < 16 years old mean 0.88 HEALTHY
-            Q_avert[sim,age] = sum(U2) # hospitalization
+            U2 = rand(Beta(8.41,1.15)) # quality of life < 16 years old mean 0.88 HEALTHY
+            Q_avert[sim,age] = n * U2 # hospitalization
+
         end
     end
 
@@ -371,8 +373,8 @@ function cost_clinic(S::Int64,season::Symbol)
     _clinic = read_file("clinic_S$S$season.csv")
     clinic = Matrix(_clinic) # convert DataFrame to matrix
 
-    inf_day = similar(clinic,Float64)
-    Q_clinic = similar(clinic,Float64)
+
+
 
 
     # calculate total costs
@@ -380,18 +382,20 @@ function cost_clinic(S::Int64,season::Symbol)
 
     # calculate infection days
     nrows, ncolm = size(clinic)
+    Q_clinic = zeros(nrows,ncolm)
     @inbounds for sim=1:nrows
         Random.seed!(sim)
         for age=1:ncolm
             n = clinic[sim,age] # number of patients
-            day = get_inf_day(n) # total number of infection days per agegroup
+            day = get_inf_day() # total number of infection days per agegroup
 
             #calculate QALY
             # disutilities obtained from
             #ref: Roy LM. Deriving health utility weights for infants with Respiratory Syncytial Virus (RSV)
             #(T). University of British Columbia. Available: https://open.library.ubc.ca/cIRcle/collections/24/items/1.0074259.
             # inout is (day,mean,standard error)
-            Q_clinic[sim,age] = sum(get_QALY(n,day,0.16,0.02)) # outpatient visits
+            Q = get_QALY(day,0.16,0.02) # outpatient visits
+            Q_clinic[sim,age] = n*Q
         end
     end
 
@@ -402,9 +406,9 @@ export cost_clinic
 
 
 #------- calculate infection days ---------------
-function get_inf_day(n::Int64)
-    expo = rand(Uniform(4.54,5.37),n) # exposure days
-    symp = rand(Uniform(5.68,6.63),n) # symptomatic days
+function get_inf_day()
+    expo = rand(Uniform(4.54,5.37)) # exposure days
+    symp = rand(Uniform(5.68,6.63)) # symptomatic days
     inf_day = expo + symp
 
     return inf_day
@@ -435,27 +439,28 @@ function cost_HospICU(S::Int64, season::Symbol)
 
     #--------------------- total length of hospital days per agegroup
     # hospital and ICU stays per individual are selected and added up for each agegroup
-    daysGW  = similar(GW ,Float64) #collecting array
-    daysICU = similar(ICU,Float64)
-    Q_GW    = similar(ICU,Float64)
-    Q_ICU   = similar(ICU,Float64)
+    #daysGW  = similar(GW ,Float64) #collecting array
+    #daysICU = similar(ICU,Float64)
+
 
     nrows, ncolm = size(GW)
+    Q_GW    = zeros(nrows,ncolm)
+    Q_ICU   = similar(Q_GW,Float64)
     @inbounds for sim=1:nrows
         Random.seed!(sim)
         for age=1:ncolm
             n_GW   = GW[sim,age]
             n_ICU  = ICU[sim,age]
-            daysGW  = rand(GWStay[age],n_GW)
-            daysICU = rand(ICUstay[age],n_ICU)
+            daysGW  = rand(GWStay[age])
+            daysICU = rand(ICUstay[age])
 
             #calculate QALY
             # disutilities obtained from
             #ref: Roy LM. Deriving health utility weights for infants with Respiratory Syncytial Virus (RSV)
             #(T). Univer- sity of British Columbia. Available: https://open.library.ubc.ca/cIRcle/collections/24/items/1.0074259.
             # inout is (day,mean,standard error)
-            Q_GW[sim,age] = sum(get_QALY(n_GW,daysGW,0.41,0.03)) # hospitalization
-            Q_ICU[sim,age]  = sum(get_QALY(n_ICU,daysICU,0.60,0.03)) # ICU admission
+            Q_GW[sim,age]  = n_GW  * get_QALY(daysGW,0.41,0.03) # hospitalization
+            Q_ICU[sim,age] = n_ICU * get_QALY(daysICU,0.60,0.03) # ICU admission
         end
     end
 
@@ -475,16 +480,13 @@ export cost_HospICU
 
 #---------calculate QALY
 # mu is mean and se is standard error
-function get_QALY(n,day,mu,se)
+function get_QALY(day,mu,se)
     alpha, beta = get_beta_parm(mu, se)
-    disutil = rand(Beta(alpha,beta),n) # disutility
+    disutil = rand(Beta(alpha,beta)) # disutility
     U1 = 1 .- disutil # utility while affecting by RSV
-    U2 = rand(Beta(8.41,1.15),n) # quality of life < 16 years old mean 0.88
+    U2 = rand(Beta(8.41,1.15)) # quality of life < 16 years old mean 0.88
     L = day ./ 365
     Q = U1 .* L + U2 .* (1 .- L)
-    #sr = 0.015
-    #Q = U1 .* (1+r).^L + U2 .* (1+r).^(1 .- L)
-    #Q = U1 .* ((1 .- exp.(-r .* L)) ./ r)
 
     return Q
 end
@@ -498,6 +500,7 @@ function get_beta_parm(mu::Float64, se::Float64)
     return alpha, beta
 end
 export get_beta_parm
+
 
 #-----------------------------------------------------------
 # Costs associate with intervention of palivizumab
