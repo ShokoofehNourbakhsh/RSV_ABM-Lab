@@ -15,6 +15,7 @@ using DataFrames
 using CSV
 using Statistics
 using Random
+using DelimitedFiles
 
 
 #----------------------------------------------------
@@ -300,6 +301,8 @@ function calcu_HospClinic(S::Int64, inf::Array{Int64},denom::Array{Float64},inc:
     # outpatient clinic cases
     clinic = inf - Hosp
 
+
+    #println("Clinic value for S $S is $clinic")
     #---------------------------
     #output of the function
     return Hosp, clinic
@@ -311,9 +314,12 @@ export calcu_HospClinic
 #---------------------------------------------------------------------------
 function calcu_outpatient(S::Int64, clinic::Array{Int64})
     _clinic = clinic
-    _outp = similar(clinic,Float64)
-    nrows, ncols = size(_outp)
+    nrows, ncols = size(_clinic)
+    _outp = zeros(nrows, ncols)
 
+    if S == 1
+        _outp = _clinic
+    end
     #-------------------------------------------------------------------------------
     # Scenario 2 and 3: INTERVENTION with Palivizumab and LAMA for high risk infants
     # scenario 4: INTERVENTION with maternal vaccine affecting both helathy and high-risk infants < 3 months old
@@ -414,6 +420,8 @@ function calcu_outpatient(S::Int64, clinic::Array{Int64})
             end
     end # senarios if
 
+    #writedlm("outpS$S.csv",_outp)
+    #println("outp for S $S is $_outp")
     #-------------------------
     # round it up to an integer value
     outp = round.(Int128, _outp)
