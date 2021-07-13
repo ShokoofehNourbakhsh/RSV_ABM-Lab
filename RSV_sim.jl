@@ -1,5 +1,7 @@
 ## single agent-based model for Respiratory syncytial virus (RSV)
-## Developed by Shokoofeh & Affan
+## Developed by Shokoofeh
+
+### Before run: include ("RSV_sim.jl") in Juno Editor
 
 module RSV_sim
 
@@ -63,9 +65,14 @@ const predist = @SVector[0.093557786,0.076953948,0.046704722,  0.020289855]  # d
 # total dwells per household size (0 is added for technical trick for writing a signle loop later)
 const householdsize = @SVector[0,755,595,555,585,1135] # householdsize of 1,2,3,4,5:20
 
-#const SAR = @SVector[0.0,0.0,0.0,0.0,1.0] # Nunavik: secondary attack rate for < 1 , 2, 3 yearsold kids
-const SAR = @SVector[0.63,0.63,0.63,0.40,0.27] # Nunavik: secondary attack rate for < 1 , 2, 3 yearsold kids
+# Nunavik: mean secondary attack rate for < 1 , 2, 3 yearsold kids from Kenya study:
+#Patrick K. Munywoki et. al., The Source of Respiratory Syncytial Virus Infection In Infants:
+#A Household Cohort Study In Rural Kenya, The Journal of Infectious Diseases,
+# https://doi.org/10.1093/infdis/jit828
+#const SAR = @SVector[0.0,0.0,0.0,0.0,1.0]
+const SAR = @SVector[0.636,0.636,0.636,0.40,0.27]
 #Extreme Test: const SAR = @SVector[1,1,1]
+const ns = 44 # number of sampled households in Kenya study
 
 # Agents Arrays
 const humans = Array{Human}(undef,numhumans)
@@ -79,6 +86,7 @@ export humans, dwells
 
 # run simulations for number of si and intensity of season
 #sea = [:mild,:moderate,:severe]  #level of outbreak depends on the season
+# example to run: sim(500,:mild)
 function sim(si::Int64, season::Symbol)
     # collecting infection for different agegroups in df
     names_inf = Symbol.(["introduced_inf","inf0to2_total","inf0to2_H","inf0to2_P",
@@ -151,9 +159,9 @@ function main(simnumber::Int64, season::Symbol)
     n = length(dwells_to_infect) # total number of eligible dwells to infect
     range = range_of_inf(n,season) # get range of outbreak depending on season
 
-    # total number of household outbreaks per simulation
+    # total number of households introduced to RSV per simulation
     n_inf = rand(range)
-    infect_dwells(dwells, dwells_to_infect, humans, n_inf, SAR, n_int)
+    infect_dwells(dwells, dwells_to_infect, humans, n_inf, SAR, ns, n_int)
 
     #-----------------
     #------ Results (objective agegroups are children under 3 years old)
@@ -406,11 +414,11 @@ export find_dwells_to_infect
 ## -------INFECT DWELLS, which at least include one children under 3 yearsold
 ## definition of inputs:
 # d:dwells, h:humans, n_inf: initial infection given to dwells,
-# SAR:secondary attack rates, n_int:number of objective agegroup we are interested in
+# SAR:secondary attack rates, ns: number of samples for SAR
+#n_int:number of objective agegroup we are interested in
 #-----------------------------------------------------------
-function infect_dwells(d, d_to_infect, h, n_inf, SAR, n_int)
+function infect_dwells(d, d_to_infect, h, n_inf, SAR, ns, n_int)
     dwells_inf = sample(d_to_infect, n_inf; replace = false)  # infected dwells
-    sec_att_rate = SAR
     @inbounds for i = 1:n_inf
         infected_id = dwells_inf[i]
         d[infected_id].infected = 1
@@ -418,7 +426,7 @@ function infect_dwells(d, d_to_infect, h, n_inf, SAR, n_int)
             sus = filter(x-> x.houseid == infected_id && x.agegroup == j ,h) # susceptiple infants
             if length(sus) > 0
                 for k = 1:length(sus)
-                    if rand() < sec_att_rate[j]
+                    if rand() < rand(Beta(SAR[j]*ns, (1-SAR[j])*ns))
                         sus[k].health = 1 # infected
                     end
                 end
@@ -515,9 +523,9 @@ function get_incidence_of_season(season::Symbol)
     s = @match season begin
         #rates corrospond to our agegroups G1 [healthy,preterm_ill] to G5 ****(G4 and G5 are missing for now)?????
         # G1:h,p - G2:h,p - G3:h,p - G4:h,p - G5: total
-        :mild => StaticArrays.@SVector[13.6:31.1, 135.67:181.9, 23.6:27.3, 152.63:160.2, 15.6:20.0, 108.5:145.2, 0.0:0.0, 0.0:0.0, 0.0:0.0]
-        :moderate => StaticArrays.@SVector[31.2:48.7,182.0:228.1, 27.4:31.9, 160.3:167.8, 20.1:24.4, 145.3:181.8, 0.0:0.0, 0.0:0.0, 0.0:0.0]
-        :severe => StaticArrays.@SVector[48.8:66.2,228.2:274.35, 32.0:36.0, 167.9:175.39, 24.5:28.7, 181.9:218.51, 0.0:0.0, 0.0:0.0, 0.0:0.0]
+        :mild => StaticArrays.@SVector[27.1:50.5, 30.69:139.34, 37.2:41.2, 213.68:265.23, 20.6:28.6, 207.58:254.28, 0.0:0.0, 0.0:0.0, 0.0:0.0]
+        :moderate => StaticArrays.@SVector[50.6:74,139.35:248, 41.3:45.3, 265.24:316.79, 28.7:36.7, 254.29:300.99, 0.0:0.0, 0.0:0.0, 0.0:0.0]
+        :severe => StaticArrays.@SVector[74.1:97.3,248.01:356.65, 45.4:49.4, 316.80:368.32, 36.8:44.8, 301:347.7, 0.0:0.0, 0.0:0.0, 0.0:0.0]
     end
 
     return s
@@ -630,7 +638,7 @@ end # module
 #using Distributed
 #using ClusterManagers
 #addprocs(SlurmManager(np);kwargs)
-#@everywhere include ("RSV.jl")
+#@everywhere include ("RSV_sim.jl")
 
 
 #### test results ####
